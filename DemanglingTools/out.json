@@ -1,0 +1,60 @@
+{
+   "Function" : [
+      {
+         "BaseName" : "operator new[]",
+         "DeclContextName" : "",
+         "EntireName" : "operator new[](unsigned long)",
+         "FunctionName" : "operator new[]",
+         "MangledName" : "_Znam",
+         "Parameters" : "(unsigned long)",
+         "ReturnType" : "",
+         "hasFunctionQualifiers" : false,
+         "isCtorOrDtor" : false,
+         "isData" : false,
+         "isFunction" : true,
+         "isSpecialName" : false
+      },
+      {
+         "BaseName" : "operator delete",
+         "DeclContextName" : "",
+         "EntireName" : "operator delete(void*)",
+         "FunctionName" : "operator delete",
+         "MangledName" : "_ZdlPv",
+         "Parameters" : "(void*)",
+         "ReturnType" : "",
+         "hasFunctionQualifiers" : false,
+         "isCtorOrDtor" : false,
+         "isData" : false,
+         "isFunction" : true,
+         "isSpecialName" : false
+      },
+      {
+         "BaseName" : "operator new",
+         "DeclContextName" : "",
+         "EntireName" : "operator new(unsigned long)",
+         "FunctionName" : "operator new",
+         "MangledName" : "_Znwm",
+         "Parameters" : "(unsigned long)",
+         "ReturnType" : "",
+         "hasFunctionQualifiers" : false,
+         "isCtorOrDtor" : false,
+         "isData" : false,
+         "isFunction" : true,
+         "isSpecialName" : false
+      },
+      {
+         "BaseName" : "operator delete[]",
+         "DeclContextName" : "",
+         "EntireName" : "operator delete[](void*)",
+         "FunctionName" : "operator delete[]",
+         "MangledName" : "_ZdaPv",
+         "Parameters" : "(void*)",
+         "ReturnType" : "",
+         "hasFunctionQualifiers" : false,
+         "isCtorOrDtor" : false,
+         "isData" : false,
+         "isFunction" : true,
+         "isSpecialName" : false
+      }
+   ]
+}
