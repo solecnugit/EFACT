@@ -4,7 +4,9 @@
 #include<string>
 int main( )
 {
-    float d1=cos(2023.2023);
+    double i;
+    std::cin>>i;
+    double d1=cos(i);
     std::string str = "3.14";
     double x = std::stod(str);
     printf("%lf,%lf",d1,x);

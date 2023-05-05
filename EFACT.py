@@ -34,6 +34,7 @@ sys.path.insert(0, '.')
 from elftools import __version__
 from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
+from elftools.common.utils import bytes2str, iterbytes
 from elftools.elf.dynamic import DynamicSection, DynamicSegment
 from elftools.elf.sections import (
     NoteSection, SymbolTableSection, SymbolTableIndexSection
@@ -68,6 +69,7 @@ libcxx_header = """
 #include <getopt.h>
 #include <locale.h>
 #include <nl_types.h>
+#include <strstream>
 """
 
 
@@ -146,6 +148,10 @@ cORcxx_end = """
 };
 """
 
+SPECIFIC_FUNC = ["__isoc99_fscanf", "__isoc99_scanf","__isoc99_sscanf","__isoc99_vfscanf","__isoc99_vscanf","__isoc99_vsscanf",
+"__isoc99_fwscanf","__isoc99_wscanf","__isoc99_swscanf","__isoc99_vfwscanf","__isoc99_vswscanf",
+"__xpg_strerror_r","__xpg_sigpause","__stack_chk_fail","__fxstat","__xstat","__libc_start_main"]
+
 
 
 # a class which referemce the llvm/Demangle.h，which include the key consept of Demangled Func
@@ -191,6 +197,137 @@ class ReadElf(object):
     # By modifying this function, the automation from parsing the elf file symbol table to 
     # generating supplementary function definitions is realized
     def demangle_symbol_tables_and_generate_complement_functions(self):
+        """ Display a strings dump of a section. section_spec is either a
+            section number or a name.
+        """
+        #我们复用readelf的代码读取.comment段里面的内容，当然readelf的源代码中该功能是可以根据段的不同而改变的，
+        #这边写死直接读.comment
+        COMMENT_DETAIL = defaultdict(list)
+        section_spec='.comment'
+        section = self._section_from_spec(section_spec)
+        if section is None:
+            # readelf prints the warning to stderr. Even though stderrs are not compared
+            # in tests, we comply with that behavior.
+            sys.stderr.write('readelf.py: Warning: Section \'%s\' was not dumped because it does not exist!\n' % (
+                section_spec))
+            return
+        if section['sh_type'] == 'SHT_NOBITS':
+            self._emitline("\nSection '%s' has no data to dump." % (
+                section_spec))
+            return
+
+        self._emitline("\nString dump of section '%s':" % section.name)
+
+        found = False
+        data = section.data()
+        dataptr = 0
+
+        while dataptr < len(data):
+            while ( dataptr < len(data) and
+                    not (32 <= data[dataptr] <= 127)):
+                dataptr += 1
+
+            if dataptr >= len(data):
+                break
+
+            endptr = dataptr
+            while endptr < len(data) and data[endptr] != 0:
+                endptr += 1
+
+            found = True
+            key=dataptr
+            detail=bytes2str(data[dataptr:endptr])
+            COMMENT_DETAIL[key].append([dataptr,detail])
+            self._emitline('  [%6x]  %s' % (
+                dataptr, bytes2str(data[dataptr:endptr])))
+
+            dataptr = endptr
+
+        if not found:
+            self._emitline('  No strings found in .comment,can`t make sure the compiler of the elf file')
+        else:
+            self._emitline()
+        
+        #若成功读取.comment,接下来对该段进行解析，确定编译器和系统和程序位数
+        #首先获取程序位数
+        header = self.elffile.header
+        e_ident = header['e_ident']
+        #ELF32或ELF64   
+        Elf_bits=describe_ei_class(e_ident['EI_CLASS'])
+        #然后获取系统架构
+        Machine_type=describe_e_machine(header['e_machine'])
+        if re.search('[x,X]86',Machine_type):
+            Machine_type = "X86"
+        elif re.search('[a,A]+rch',Machine_type):
+            Machine_type ="ARM"
+
+
+        #然后获取操作系统
+        Ubuntu_pattern=re.compile(r'[U,u]+buntu')
+        RedHat_pattern=re.compile(r'[R,r]+ed[ ]*[H.h]at')
+        System=None
+        Distribution=None
+        Version=None
+        for key in COMMENT_DETAIL.keys():
+            comment_values=COMMENT_DETAIL[key]
+            for det in comment_values:
+                if re.search(Ubuntu_pattern,det[1]) !=None:
+                    System='Ubuntu'
+                    Distribution='Ubuntu'
+                    #确定是Ubuntu之后，还需要确定确定具体版本号
+                    if re.search('16.04',det[1]) !=None:
+                        System=System+"16.04"
+                        Version="16.04"
+                    elif re.search('18.04',det[1]) !=None  or re.search('17',det[1]) !=None:
+                        System=System+"18.04"
+                        Version="18.04"
+                    elif re.search('20.04',det[1]) !=None  or re.search('19',det[1]) !=None:
+                        System=System+"20.04"
+                        Version="20.04"
+                    elif re.search('22.04',det[1]) !=None  or re.search('21',det[1]) !=None:
+                        System=System+"22.04"
+                        Version="22.04"
+                    
+
+                if re.search(RedHat_pattern,det[1]) !=None:
+                    System='CentOS'
+                    Distribution="CentOS"
+                    Version="8"
+        
+        if System==None:
+            print("System not support")
+            sys.exit()
+
+        #再获取编译器
+        Clang_pattern=re.compile(r'[C,c]lang')
+        Clang_version_pattern=re.compile(r'clang version [0-9.-]*')
+        version_pattern=re.compile(r'[0-9.-]+[.]+[0-9.-]*')
+        GCC_pattern=re.compile(r'[G,g]+[C,c]+[C,c]')
+        GCC_version_pattern=re.compile(r'[G,g]+[C,c]+[C,c]: [(]+.+[)] [0-9.-]*')
+        Compiler_name=None
+        Compiler_version=None
+        for key in COMMENT_DETAIL.keys():
+            comment_values=COMMENT_DETAIL[key]
+            for det in comment_values:
+                if re.search(GCC_pattern,det[1]) !=None:
+                    Compiler_name='GCC'
+                    obj=re.search(GCC_version_pattern,det[1])
+                    version_obj=re.search(version_pattern,obj.string)
+                    Compiler_version=version_obj.string[version_obj.regs[0][0]:version_obj.regs[0][1]]
+                if re.search(Clang_pattern,det[1]) !=None:
+                    Compiler_name='clang'
+                    obj=re.search(Clang_version_pattern,det[1])
+                    version_obj=re.search(version_pattern,obj.string)
+                    Compiler_version=version_obj.string[version_obj.regs[0][0]:version_obj.regs[0][1]]
+        
+        if Compiler_name==None:
+            print("Compiler not support")
+            sys.exit()
+        
+
+        #到此系统架构+操作系统+架构位数都已经拿到了，下一步开始遍历符号表。
+        print(111)
+
         #Anomaly detection that preserves the integrity of the symbol table in the original script
         self._init_versioninfo()
 
@@ -202,6 +339,9 @@ class ReadElf(object):
             self._emitline('Dynamic symbol information is not available for'
                            ' displaying symbols.')
         GCCLib_path = os.environ['LIFT_GCC_LIB_PATH']
+
+        GCCLib_path = os.path.join(GCCLib_path, Machine_type, Distribution, Version)
+
         cpp_flag=False
         continue_flag=False
         #an elf file has many sections in smytalbes,like '.dynsym','.symtab',
@@ -274,11 +414,11 @@ class ReadElf(object):
                 #write the Complement.c/cpp
                 abioutfile=os.path.dirname(os.path.abspath(__file__))+"/../Result/"
                 write_cxx_abi_file(abioutfile,json_data,GCCLib_path)
+                write_cxx_format_output_file(abioutfile,json_data,GCCLib_path)
             else:
                 abioutfile=os.path.dirname(os.path.abspath(__file__))+"/../Result/"
-                #write_c_abi_file(abioutfile,GCCLib_path)
-                write_c_output_file(abioutfile,GCCLib_path)
-                sys.exit()
+                write_c_abi_file(abioutfile,GCCLib_path)
+                write_c_format_output_file(abioutfile,GCCLib_path)
 
         else:
             print("There was a problem parsing the symbol table. end of program")  
@@ -306,7 +446,19 @@ class ReadElf(object):
             
                 
 
-
+    def _section_from_spec(self, spec):
+        """ Retrieve a section given a "spec" (either number or name).
+            Return None if no such section exists in the file.
+        """
+        try:
+            num = int(spec)
+            if num < self.elffile.num_sections():
+                return self.elffile.get_section(num)
+            else:
+                return None
+        except ValueError:
+            # Not a number. Must be a name then
+            return self.elffile.get_section_by_name(spec)
     
     
     def _init_versioninfo(self):
@@ -502,11 +654,23 @@ def write_c_abi_file(outfile,allDictPath):
     with open(outfile, "w") as s:
         #Write the include header file first
         s.write(libc_header)
-
+        for key in GLIBC_FUNCDECL_LIST.keys():
+            if key in SPECIFIC_FUNC:
+                sys.path.append(dictPath)
+                from allcdict_param import dict
+                CSearchDict=dict.dictionary
+                if CSearchDict.get(key)!=None:
+                    if isinstance(CSearchDict.get(key),list):
+                        funcs= CSearchDict.get(key)
+                        s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
+                        s.write("\n")
+                else:
+                    print(key)
+                    print(" unable to supplement\n")
         s.write(c_header)
         for key in GLIBC_FUNCDECL_LIST.keys():
             sys.path.append(dictPath)
-            from allcdict import dict
+            from allcdict_param import dict
             CSearchDict=dict.dictionary
             if CSearchDict.get(key)!=None:
                 s.write("(void *) {0},".format(key))
@@ -519,7 +683,7 @@ def write_c_abi_file(outfile,allDictPath):
         s.write(cORcxx_end)
 
 
-def write_c_output_file(outfile,allDictPath):
+def write_c_format_output_file(outfile,allDictPath):
 
 
     # generate the abi lib cc file
@@ -541,6 +705,72 @@ def write_c_output_file(outfile,allDictPath):
             else:
                 print(key)
                 print(" unable to supplement\n")
+
+
+def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
+
+
+    # generate the abi lib cc file
+    outfile=outfile+"complement_formatcxx.cpp"
+    dictPath=allDictPath
+    with open(outfile, "w") as s:
+        #Write the include header file first
+        s.write(libcxx_header)
+
+        for key in GLIBC_FUNCDECL_LIST.keys():
+            sys.path.append(dictPath)
+            from allcxxdict_param import dict
+            CXXSearchDict=dict.dictionary
+            if CXXSearchDict.get(key)!=None:
+                list1 =CXXSearchDict.get(key)
+                i=0
+                for item in list1:
+                    if isinstance(item, tuple):
+                        if i == len(list1) - 1:
+                            print(item[0])
+                            print(item[1])
+                            s.write("{0} {1} {2};".format(item[0],key,item[1]))
+                            s.write("\n")
+                        i=i+1
+                    else :
+                        continue    
+            else:
+                print(key)
+                print(" unable to supplement\n")
+
+
+        for value in jsonDict["Function"]:
+            value["canBeComplement"]=False
+            if value.get("ReturnType") != "":
+                s.write("{0} {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
+                s.write("\n")
+                value["canBeComplement"]=True
+            elif value.get("isCtorOrDtor") ==True:
+                s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
+                s.write("\n")
+                value["canBeComplement"]=True
+            elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
+                s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
+                s.write("\n")
+                value["canBeComplement"]=True
+            else:
+                sys.path.append(dictPath)
+                from allcxxdict_param import dict
+                CXXSearchDict=dict.dictionary
+                if CXXSearchDict.get(value.get("BaseName"))!=None:
+                    if isinstance(CXXSearchDict.get(value.get("BaseName")),list):
+                        for funcs in CXXSearchDict.get(value.get("BaseName")):
+                            if funcs[1]==value.get("Parameters"):
+                                s.write("{0} {1} {2};".format(funcs[0],value.get("MangledName"),value.get("Parameters")))
+                                s.write("\n")
+                                value["canBeComplement"]=True    
+                    else:
+                        s.write("{0} {1} {2};".format(CXXSearchDict.get(value.get("BaseName")),value.get("MangledName"),value.get("Parameters")))
+                        s.write("\n")
+                        value["canBeComplement"]=True
+                else:
+                    print(value.get("MangledName"))
+                    print(" unable to supplement\n")
 
 
 

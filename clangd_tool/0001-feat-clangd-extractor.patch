@@ -1,0 +1,274 @@
+From 13ed9bc6eb2782c75bc74bf5b10da8deea2470b1 Mon Sep 17 00:00:00 2001
+From: soleadmin <DarkHighness@users.noreply.github.com>
+Date: Fri, 5 May 2023 10:40:06 +0800
+Subject: [PATCH] feat: clangd-extractor
+
+---
+ clang-tools-extra/clangd/CMakeLists.txt       |   1 +
+ .../clangd/extractor/CMakeLists.txt           |  22 +++
+ .../clangd/extractor/ExtractorMain.cpp        | 180 ++++++++++++++++++
+ clang/lib/Sema/SemaCodeComplete.cpp           |  13 +-
+ 4 files changed, 210 insertions(+), 6 deletions(-)
+ create mode 100644 clang-tools-extra/clangd/extractor/CMakeLists.txt
+ create mode 100644 clang-tools-extra/clangd/extractor/ExtractorMain.cpp
+
+diff --git a/clang-tools-extra/clangd/CMakeLists.txt b/clang-tools-extra/clangd/CMakeLists.txt
+index 183a3666ee58..576a0a3b3cbc 100644
+--- a/clang-tools-extra/clangd/CMakeLists.txt
++++ b/clang-tools-extra/clangd/CMakeLists.txt
+@@ -195,6 +195,7 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+ endif()
+ add_subdirectory(tool)
+ add_subdirectory(indexer)
++add_subdirectory(extractor)
+ 
+ if (LLVM_INCLUDE_BENCHMARKS)
+   add_subdirectory(benchmarks)
+diff --git a/clang-tools-extra/clangd/extractor/CMakeLists.txt b/clang-tools-extra/clangd/extractor/CMakeLists.txt
+new file mode 100644
+index 000000000000..940d4c0d5b73
+--- /dev/null
++++ b/clang-tools-extra/clangd/extractor/CMakeLists.txt
+@@ -0,0 +1,22 @@
++set(LLVM_LINK_COMPONENTS
++    Support
++    )
++
++add_clang_executable(clangd-extractor
++  ExtractorMain.cpp
++  )
++
++clang_target_link_libraries(clangd-extractor
++  PRIVATE
++  clangAST
++  clangBasic
++  clangFrontend
++  clangIndex
++  clangLex
++  clangTooling
++)
++target_link_libraries(clangd-extractor
++  PRIVATE
++  clangDaemon
++  clangdSupport
++)
+diff --git a/clang-tools-extra/clangd/extractor/ExtractorMain.cpp b/clang-tools-extra/clangd/extractor/ExtractorMain.cpp
+new file mode 100644
+index 000000000000..097f73e543d1
+--- /dev/null
++++ b/clang-tools-extra/clangd/extractor/ExtractorMain.cpp
+@@ -0,0 +1,180 @@
++//===--- IndexerMain.cpp -----------------------------------------*- C++-*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// clangd-indexer is a tool to gather index data (symbols, xrefs) from source.
++//
++//===----------------------------------------------------------------------===//
++
++#include "CompileCommands.h"
++#include "Compiler.h"
++#include "index/IndexAction.h"
++#include "index/Merge.h"
++#include "index/Ref.h"
++#include "index/Serialization.h"
++#include "index/Symbol.h"
++#include "index/SymbolCollector.h"
++#include "support/Logger.h"
++#include "clang/Index/IndexSymbol.h"
++#include "clang/Tooling/ArgumentsAdjusters.h"
++#include "clang/Tooling/Execution.h"
++#include "clang/Tooling/Tooling.h"
++#include "llvm/Support/CommandLine.h"
++#include "llvm/Support/Signals.h"
++#include "llvm/Support/raw_ostream.h"
++#include <algorithm>
++#include <utility>
++
++namespace clang {
++namespace clangd {
++namespace {
++
++static llvm::cl::opt<IndexFileFormat>
++    Format("format", llvm::cl::desc("Format of the index to be written"),
++           llvm::cl::values(clEnumValN(IndexFileFormat::YAML, "yaml",
++                                       "human-readable YAML format"),
++                            clEnumValN(IndexFileFormat::RIFF, "binary",
++                                       "binary RIFF format")),
++           llvm::cl::init(IndexFileFormat::RIFF));
++
++class IndexActionFactory : public tooling::FrontendActionFactory {
++public:
++  IndexActionFactory(IndexFileIn &Result) : Result(Result) {}
++
++  std::unique_ptr<FrontendAction> create() override {
++    SymbolCollector::Options Opts;
++    Opts.CountReferences = true;
++    Opts.AlwaysCollectReturnTypeAndParamterTypes = true;
++    Opts.CollectSimpleReturnTypeAndParamterTypes = true;
++    Opts.FileFilter = [&](const SourceManager &SM, FileID FID) {
++      const auto *F = SM.getFileEntryForID(FID);
++      if (!F)
++        return false; // Skip invalid files.
++      auto AbsPath = getCanonicalPath(F, SM);
++      if (!AbsPath)
++        return false; // Skip files without absolute path.
++      std::lock_guard<std::mutex> Lock(FilesMu);
++      return Files.insert(*AbsPath).second; // Skip already processed files.
++    };
++    return createStaticIndexingAction(
++        Opts,
++        [&](SymbolSlab S) {
++          constexpr const std::array<index::SymbolKind, 7> KindInclude = {
++              index::SymbolKind::Function,
++              // index::SymbolKind::ConversionFunction,
++              index::SymbolKind::InstanceMethod,
++              index::SymbolKind::ClassMethod,
++              index::SymbolKind::StaticMethod,
++              // index::SymbolKind::Constructor,
++              // index::SymbolKind::Destructor,
++          };
++
++          // Merge as we go.
++          std::lock_guard<std::mutex> Lock(SymbolsMu);
++          for (const auto &Sym : S) {
++            const auto Kind = Sym.SymInfo.Kind;
++
++            if (std::find(KindInclude.begin(), KindInclude.end(), Kind) ==
++                KindInclude.end())
++              continue;
++
++            if (const auto *Existing = Symbols.find(Sym.ID))
++              Symbols.insert(mergeSymbol(*Existing, Sym));
++            else
++              Symbols.insert(Sym);
++          }
++        },
++        /*RefsCallback= */ nullptr,
++        /*RelationsCallback =*/nullptr,
++        /*IncludeGraphCallback=*/nullptr);
++  }
++
++  bool runInvocation(std::shared_ptr<CompilerInvocation> Invocation,
++                     FileManager *Files,
++                     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
++                     DiagnosticConsumer *DiagConsumer) override {
++    disableUnsupportedOptions(*Invocation);
++    return tooling::FrontendActionFactory::runInvocation(
++        std::move(Invocation), Files, std::move(PCHContainerOps), DiagConsumer);
++  }
++
++  // Awkward: we write the result in the destructor, because the executor
++  // takes ownership so it's the easiest way to get our data back out.
++  ~IndexActionFactory() { Result.Symbols = std::move(Symbols).build(); }
++
++private:
++  IndexFileIn &Result;
++  std::mutex FilesMu;
++  llvm::StringSet<> Files;
++  std::mutex SymbolsMu;
++  SymbolSlab::Builder Symbols;
++};
++
++} // namespace
++} // namespace clangd
++} // namespace clang
++
++int main(int argc, const char **argv) {
++  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
++
++  const char *Overview = R"(
++  Creates an index of symbol information etc in a whole project.
++
++  Example usage for a project using CMake compile commands:
++
++  $ clangd-extractor --executor=all-TUs compile_commands.json > clangd.dex
++
++  Example usage for file sequence index without flags:
++
++  $ clangd-extractor File1.cpp File2.cpp ... FileN.cpp > clangd.dex
++
++  Note: only symbols from header files will be indexed.
++  )";
++
++  auto Executor = clang::tooling::createExecutorFromCommandLineArgs(
++      argc, argv, llvm::cl::getGeneralCategory(), Overview);
++
++  if (!Executor) {
++    llvm::errs() << llvm::toString(Executor.takeError()) << "\n";
++    return 1;
++  }
++
++  // Collect symbols found in each translation unit, merging as we go.
++  clang::clangd::IndexFileIn Data;
++  auto Err = Executor->get()->execute(
++      std::make_unique<clang::clangd::IndexActionFactory>(Data),
++      clang::tooling::ArgumentsAdjuster(
++          [Mangler = std::make_shared<clang::clangd::CommandMangler>(
++               clang::clangd::CommandMangler::detect())](
++              const std::vector<std::string> &Args, llvm::StringRef File) {
++            clang::tooling::CompileCommand Cmd;
++            Cmd.CommandLine = Args;
++            Mangler->operator()(Cmd, File);
++            return Cmd.CommandLine;
++          }));
++  if (Err) {
++    clang::clangd::elog("{0}", std::move(Err));
++  }
++
++  llvm::outs() << "class dict:\n";
++  llvm::outs() << "dictionary={\n";
++
++  if (Data.Symbols.has_value()) {
++    const auto &Symbols = Data.Symbols.value();
++    for (const auto &Symbol : Symbols) {
++      llvm::outs() << "'" << Symbol.Name << "':['" << Symbol.ReturnType << "','" << Symbol.Signature << "'],\n"; 
++    }
++  }
++
++  llvm::outs() << "}";
++
++  // Emit collected data.
++  // clang::clangd::IndexFileOut Out(Data);
++  // Out.Format = clang::clangd::Format;
++  // llvm::outs() << Out;
++  return 0;
++}
+diff --git a/clang/lib/Sema/SemaCodeComplete.cpp b/clang/lib/Sema/SemaCodeComplete.cpp
+index d5f906b1c7a9..138949d382a4 100644
+--- a/clang/lib/Sema/SemaCodeComplete.cpp
++++ b/clang/lib/Sema/SemaCodeComplete.cpp
+@@ -2718,8 +2718,9 @@ static void AddResultTypeChunk(ASTContext &Context,
+ 
+   // Determine the type of the declaration (if it has a type).
+   QualType T;
+-  if (const FunctionDecl *Function = ND->getAsFunction())
+-    T = Function->getReturnType();
++  if (const FunctionDecl *Function = ND->getAsFunction()) {
++    T = Function->getReturnType()->getCanonicalTypeInternal();
++  }
+   else if (const auto *Method = dyn_cast<ObjCMethodDecl>(ND)) {
+     if (!BaseType.isNull())
+       T = Method->getSendResultType(BaseType);
+@@ -3069,10 +3070,10 @@ static void AddFunctionParameterChunks(Preprocessor &PP,
+     InOptional = false;
+ 
+     // Format the placeholder string.
+-    std::string PlaceholderStr = FormatFunctionParameter(Policy, Param);
+-    if (Param->hasDefaultArg())
+-      PlaceholderStr +=
+-          GetDefaultValueString(Param, PP.getSourceManager(), PP.getLangOpts());
++    std::string PlaceholderStr = FormatFunctionParameter(Policy, Param, true, true);
++    // if (Param->hasDefaultArg())
++    //   PlaceholderStr +=
++    //       GetDefaultValueString(Param, PP.getSourceManager(), PP.getLangOpts());
+ 
+     if (Function->isVariadic() && P == N - 1)
+       PlaceholderStr += ", ...";
+-- 
+2.39.1
+
