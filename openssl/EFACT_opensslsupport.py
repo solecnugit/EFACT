@@ -57,6 +57,8 @@ from elftools.dwarf.ranges import RangeEntry, BaseAddressEntry as RangeBaseAddre
 GLIBC_FUNCDECL_LIST = defaultdict(list)
 #A list of functions include from glibc
 GLIBCXX_FUNCDECL_LIST = defaultdict(list)
+#A list of functions include from openssl
+OPENSSL_FUNCDECL_LIST = defaultdict(list)
 
 #the libc/libcxx_header must be the same with /dict/libc/libcxx.h
 #things the libs below did't include all the libs,you can add new libs here. 
@@ -115,6 +117,78 @@ libc_header = """
 #include <getopt.h>
 #include <locale.h>
 #include <nl_types.h>
+// OpenSSL
+#include <openssl/aes.h>
+#include <openssl/asn1.h>
+#include <openssl/asn1t.h>
+#include <openssl/bio.h>
+#include <openssl/blowfish.h>
+#include <openssl/bn.h>
+#include <openssl/buffer.h>
+#include <openssl/camellia.h>
+#include <openssl/cast.h>
+#include <openssl/cmac.h>
+#include <openssl/cms.h>
+#include <openssl/comp.h>
+#include <openssl/conf.h>
+#include <openssl/conf_api.h>
+#include <openssl/crypto.h>
+#include <openssl/ct.h>
+#include <openssl/des.h>
+#include <openssl/dh.h>
+#include <openssl/dsa.h>
+#include <openssl/dtls1.h>
+#include <openssl/e_os2.h>
+#include <openssl/ebcdic.h>
+#include <openssl/ec.h>
+#include <openssl/ecdh.h>
+#include <openssl/ecdsa.h>
+#include <openssl/engine.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/idea.h>
+#include <openssl/kdf.h>
+#include <openssl/lhash.h>
+#include <openssl/md2.h>
+#include <openssl/md4.h>
+#include <openssl/md5.h>
+#include <openssl/mdc2.h>
+#include <openssl/modes.h>
+#include <openssl/obj_mac.h>
+#include <openssl/objects.h>
+#include <openssl/ocsp.h>
+#include <openssl/opensslconf.h>
+#include <openssl/opensslv.h>
+#include <openssl/ossl_typ.h>
+#include <openssl/pem.h>
+#include <openssl/pem2.h>
+#include <openssl/pkcs12.h>
+#include <openssl/pkcs7.h>
+#include <openssl/rand.h>
+#include <openssl/rc2.h>
+#include <openssl/rc4.h>
+#include <openssl/rc5.h>
+#include <openssl/ripemd.h>
+#include <openssl/rsa.h>
+#include <openssl/safestack.h>
+#include <openssl/seed.h>
+#include <openssl/sha.h>
+#include <openssl/srtp.h>
+#include <openssl/srtp.h>
+#include <openssl/ssl.h>
+#include <openssl/ssl2.h>
+#include <openssl/ssl3.h>
+#include <openssl/stack.h>
+#include <openssl/symhacks.h>
+#include <openssl/tls1.h>
+#include <openssl/ts.h>
+#include <openssl/txt_db.h>
+#include <openssl/ui.h>
+#include <openssl/whrlpool.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/x509v3.h>
 """
 
 
@@ -200,135 +274,7 @@ class ReadElf(object):
         """ Display a strings dump of a section. section_spec is either a
             section number or a name.
         """
-        #We reuse the code from readelf to read the contents of the .comment section. Of course, 
-        #this functionality in the readelf source code can be changed according to different sections.
-        #Here, it is hardcoded to directly read the .comment section.
-        COMMENT_DETAIL = defaultdict(list)
-        section_spec='.comment'
-        section = self._section_from_spec(section_spec)
-        if section is None:
-            # readelf prints the warning to stderr. Even though stderrs are not compared
-            # in tests, we comply with that behavior.
-            sys.stderr.write('readelf.py: Warning: Section \'%s\' was not dumped because it does not exist!\n' % (
-                section_spec))
-            return
-        if section['sh_type'] == 'SHT_NOBITS':
-            self._emitline("\nSection '%s' has no data to dump." % (
-                section_spec))
-            return
 
-        self._emitline("\nString dump of section '%s':" % section.name)
-
-        found = False
-        data = section.data()
-        dataptr = 0
-
-        while dataptr < len(data):
-            while ( dataptr < len(data) and
-                    not (32 <= data[dataptr] <= 127)):
-                dataptr += 1
-
-            if dataptr >= len(data):
-                break
-
-            endptr = dataptr
-            while endptr < len(data) and data[endptr] != 0:
-                endptr += 1
-
-            found = True
-            key=dataptr
-            detail=bytes2str(data[dataptr:endptr])
-            COMMENT_DETAIL[key].append([dataptr,detail])
-            self._emitline('  [%6x]  %s' % (
-                dataptr, bytes2str(data[dataptr:endptr])))
-
-            dataptr = endptr
-
-        if not found:
-            self._emitline('  No strings found in .comment,can`t make sure the compiler of the elf file')
-        else:
-            self._emitline()
-        
-        #If successfully reading the .comment section, the next step is to analyze this section to 
-        #determine the compiler, system, and program bit size.
-        #First, obtain the program's bit size.
-        header = self.elffile.header
-        e_ident = header['e_ident']
-        #ELF32 or ELF64   
-        Elf_bits=describe_ei_class(e_ident['EI_CLASS'])
-        #Next, obtain the system architecture.
-        Machine_type=describe_e_machine(header['e_machine'])
-        if re.search('[x,X]86',Machine_type):
-            Machine_type = "X86"
-        elif re.search('[a,A]+rch',Machine_type):
-            Machine_type ="ARM"
-
-
-        #After that, obtain the operating system.
-        Ubuntu_pattern=re.compile(r'[U,u]+buntu')
-        RedHat_pattern=re.compile(r'[R,r]+ed[ ]*[H.h]at')
-        System=None
-        Distribution=None
-        Version=None
-        for key in COMMENT_DETAIL.keys():
-            comment_values=COMMENT_DETAIL[key]
-            for det in comment_values:
-                if re.search(Ubuntu_pattern,det[1]) !=None:
-                    System='Ubuntu'
-                    Distribution='Ubuntu'
-                    #Once it's confirmed to be Ubuntu, you also need to determine the specific version number.
-                    if re.search('16.04',det[1]) !=None:
-                        System=System+"16.04"
-                        Version="16.04"
-                    elif re.search('18.04',det[1]) !=None  or re.search('17',det[1]) !=None:
-                        System=System+"18.04"
-                        Version="18.04"
-                    elif re.search('20.04',det[1]) !=None  or re.search('19',det[1]) !=None:
-                        System=System+"20.04"
-                        Version="20.04"
-                    elif re.search('22.04',det[1]) !=None  or re.search('21',det[1]) !=None:
-                        System=System+"22.04"
-                        Version="22.04"
-                    
-
-                if re.search(RedHat_pattern,det[1]) !=None:
-                    System='CentOS'
-                    Distribution="CentOS"
-                    Version="8"
-        
-        if System==None:
-            print("System not support")
-            sys.exit()
-
-        #Then, obtain the compiler information.
-        Clang_pattern=re.compile(r'[C,c]lang')
-        Clang_version_pattern=re.compile(r'clang version [0-9.-]*')
-        version_pattern=re.compile(r'[0-9.-]+[.]+[0-9.-]*')
-        GCC_pattern=re.compile(r'[G,g]+[C,c]+[C,c]')
-        GCC_version_pattern=re.compile(r'[G,g]+[C,c]+[C,c]: [(]+.+[)] [0-9.-]*')
-        Compiler_name=None
-        Compiler_version=None
-        for key in COMMENT_DETAIL.keys():
-            comment_values=COMMENT_DETAIL[key]
-            for det in comment_values:
-                if re.search(GCC_pattern,det[1]) !=None:
-                    Compiler_name='GCC'
-                    obj=re.search(GCC_version_pattern,det[1])
-                    version_obj=re.search(version_pattern,obj.string)
-                    Compiler_version=version_obj.string[version_obj.regs[0][0]:version_obj.regs[0][1]]
-                if re.search(Clang_pattern,det[1]) !=None:
-                    Compiler_name='clang'
-                    obj=re.search(Clang_version_pattern,det[1])
-                    version_obj=re.search(version_pattern,obj.string)
-                    Compiler_version=version_obj.string[version_obj.regs[0][0]:version_obj.regs[0][1]]
-        
-        if Compiler_name==None:
-            print("Compiler not support")
-            sys.exit()
-        
-
-        #At this point, we have obtained the system architecture, operating system, 
-        #and architecture bit-width. The next step is to traverse the symbol table.
 
         #Anomaly detection that preserves the integrity of the symbol table in the original script
         self._init_versioninfo()
@@ -342,9 +288,9 @@ class ReadElf(object):
                            ' displaying symbols.')
         GCCLib_path = os.environ['LIFT_GCC_LIB_PATH']
 
-        GCCLib_path = os.path.join(GCCLib_path, Machine_type, Distribution, Version)
-
+        OPENssl_Lib_path = os.environ['LIFT_OPENSSL_LIB_PATH']
         cpp_flag=False
+        openssl_flag=False
         continue_flag=False
         #an elf file has many sections in smytalbes,like '.dynsym','.symtab',
         # in order to cover most of the extern func，we loop all the sections.
@@ -371,6 +317,15 @@ class ReadElf(object):
                     # There is no clear sign in the elf file that the program is a C++ program. 
                     # Here we judge whether the program is a C++ program by 
                     # checking whether the Name Mangling function exists in the symbol table.
+                    openssl_obj=re.search('@+OPENSSL[A-Za-z]*_[0-9,.]+',symbol.name) 
+                    if openssl_obj !=None:
+                        print(111)
+                        funcName=symbol.name[0:openssl_obj.regs[0][0]]
+                        libVersionName=symbol.name[openssl_obj.regs[0][0]: ]
+                        key=funcName
+                        OPENSSL_FUNCDECL_LIST[key].append("1")
+                        openssl_flag=True
+
                     if cpp_flag==False:
                         if symbol.name [0:2]=="_Z":
                             cpp_flag=True
@@ -419,12 +374,14 @@ class ReadElf(object):
                 write_cxx_format_output_file(abioutfile,json_data,GCCLib_path)
             else:
                 abioutfile=os.path.dirname(os.path.abspath(__file__))+"/../Result/"
-                write_c_abi_file(abioutfile,GCCLib_path)
-                write_c_format_output_file(abioutfile,GCCLib_path)
+                write_c_abi_file(abioutfile,GCCLib_path,OPENssl_Lib_path, openssl_flag)
+                write_c_format_output_file(abioutfile,GCCLib_path,OPENssl_Lib_path, openssl_flag)
 
         else:
-            print("There was a problem parsing the symbol table. end of program")  
-            sys.exit()  
+            if openssl_flag==False :
+                print("There was a problem parsing the symbol table. end of program")  
+                sys.exit()  
+
         
         #Complement.c/cpp has been generated so far, 
         #and finally the corresponding supplementary LLVMIR is generated
@@ -648,7 +605,7 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
 
         s.write(cORcxx_end)
 
-def write_c_abi_file(outfile,allDictPath):
+def write_c_abi_file(outfile,allDictPath,OPENssl_Lib_path,openssl_flag):
 
     # generate the abi lib cc file
     outfile=outfile+"complement.c"
@@ -680,12 +637,22 @@ def write_c_abi_file(outfile,allDictPath):
             else:
                 print(key)
                 print(" unable to supplement\n")
+        for key in OPENSSL_FUNCDECL_LIST.keys():
+            sys.path.append(OPENssl_Lib_path)
+            from openssl import dict
+            OpensslSearchDict=dict.dictionary
+            if OpensslSearchDict.get(key)!=None:
+                s.write("(void *) {0},".format(key))
+                s.write("\n")
+            else:
+                print(key)
+                print(" unable to supplement\n")
 
 
         s.write(cORcxx_end)
 
 
-def write_c_format_output_file(outfile,allDictPath):
+def write_c_format_output_file(outfile,allDictPath,OPENssl_Lib_path,openssl_flag):
 
 
     # generate the abi lib cc file
@@ -702,6 +669,18 @@ def write_c_format_output_file(outfile,allDictPath):
             if CSearchDict.get(key)!=None:
                 if isinstance(CSearchDict.get(key),list):
                     funcs= CSearchDict.get(key)
+                    s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
+                    s.write("\n")
+            else:
+                print(key)
+                print(" unable to supplement\n")
+        for key in OPENSSL_FUNCDECL_LIST.keys():
+            sys.path.append(OPENssl_Lib_path)
+            from openssl import dict
+            OpensslSearchDict=dict.dictionary
+            if OpensslSearchDict.get(key)!=None:
+                if isinstance(OpensslSearchDict.get(key),list):
+                    funcs= OpensslSearchDict.get(key)
                     s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
                     s.write("\n")
             else:
