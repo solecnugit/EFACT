@@ -43,6 +43,9 @@ to use this tool,you have to install :
         |-- README.md
         |-- generate_glibc_dict.py
         |-- dict_example
+        |-- openssl
+        |-- llvm_pass_for_VPC
+
 
 
 
