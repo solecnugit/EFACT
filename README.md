@@ -103,8 +103,7 @@ $ python generate_glibc_dict.py
 ```
 
             
-### Clangd
-This submodule is mainly responsible for generating the dictioanry of external functions. But the dictionary is used to assist the implementation of automation tools.
+### Our attempt on calngd (not adopted)
 
 This tool is based on clangd-indexer, which is a part of [clangd](https://clangd.llvm.org/), a language server that provides IDE-like features to editors and other tools. 
 
