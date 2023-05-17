@@ -200,9 +200,8 @@ class ReadElf(object):
         """ Display a strings dump of a section. section_spec is either a
             section number or a name.
         """
-        #We reuse the code from readelf to read the contents of the .comment section. Of course, 
-        #this functionality in the readelf source code can be changed according to different sections.
-        #Here, it is hardcoded to directly read the .comment section.
+        #我们复用readelf的代码读取.comment段里面的内容，当然readelf的源代码中该功能是可以根据段的不同而改变的，
+        #这边写死直接读.comment
         COMMENT_DETAIL = defaultdict(list)
         section_spec='.comment'
         section = self._section_from_spec(section_spec)
@@ -249,14 +248,13 @@ class ReadElf(object):
         else:
             self._emitline()
         
-        #If successfully reading the .comment section, the next step is to analyze this section to 
-        #determine the compiler, system, and program bit size.
-        #First, obtain the program's bit size.
+        #若成功读取.comment,接下来对该段进行解析，确定编译器和系统和程序位数
+        #首先获取程序位数
         header = self.elffile.header
         e_ident = header['e_ident']
-        #ELF32 or ELF64   
+        #ELF32或ELF64   
         Elf_bits=describe_ei_class(e_ident['EI_CLASS'])
-        #Next, obtain the system architecture.
+        #然后获取系统架构
         Machine_type=describe_e_machine(header['e_machine'])
         if re.search('[x,X]86',Machine_type):
             Machine_type = "X86"
@@ -264,7 +262,7 @@ class ReadElf(object):
             Machine_type ="ARM"
 
 
-        #After that, obtain the operating system.
+        #然后获取操作系统
         Ubuntu_pattern=re.compile(r'[U,u]+buntu')
         RedHat_pattern=re.compile(r'[R,r]+ed[ ]*[H.h]at')
         System=None
@@ -276,7 +274,7 @@ class ReadElf(object):
                 if re.search(Ubuntu_pattern,det[1]) !=None:
                     System='Ubuntu'
                     Distribution='Ubuntu'
-                    #Once it's confirmed to be Ubuntu, you also need to determine the specific version number.
+                    #确定是Ubuntu之后，还需要确定确定具体版本号
                     if re.search('16.04',det[1]) !=None:
                         System=System+"16.04"
                         Version="16.04"
@@ -300,7 +298,7 @@ class ReadElf(object):
             print("System not support")
             sys.exit()
 
-        #Then, obtain the compiler information.
+        #再获取编译器
         Clang_pattern=re.compile(r'[C,c]lang')
         Clang_version_pattern=re.compile(r'clang version [0-9.-]*')
         version_pattern=re.compile(r'[0-9.-]+[.]+[0-9.-]*')
@@ -327,8 +325,8 @@ class ReadElf(object):
             sys.exit()
         
 
-        #At this point, we have obtained the system architecture, operating system, 
-        #and architecture bit-width. The next step is to traverse the symbol table.
+        #到此系统架构+操作系统+架构位数都已经拿到了，下一步开始遍历符号表。
+        print(111)
 
         #Anomaly detection that preserves the integrity of the symbol table in the original script
         self._init_versioninfo()
@@ -604,24 +602,6 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
                     print(value.get("MangledName"))
                     print(" unable to supplement\n")
         
-        #for key in GLIBC_FUNCDECL_LIST.keys():
-        #    sys.path.append(dictPath)
-        #    from allcxxdict_param import dict
-        #   CXXSearchDict=dict.dictionary
-        #    if CXXSearchDict.get(key)!=None:
-        #        list1 =CXXSearchDict.get(key)
-        #        i=0
-        #        for item in list1:
-        #            if isinstance(item, tuple):
-        #                if i == len(list1) - 1:
-        #                    print(item[0])
-        #                    print(item[1])
-        #                    print(666666666666)
-        #                    s.write("{0} {1} {2};".format(item[0],key,item[1]))
-        #                    s.write("\n")
-        #                i=i+1
-        #            else :
-        #                continue    
         s.write(cxx_header2)
 
 
@@ -694,7 +674,7 @@ def write_c_format_output_file(outfile,allDictPath):
     with open(outfile, "w") as s:
         #Write the include header file first
         s.write(libc_header)
-
+        VPC_count=0
         for key in GLIBC_FUNCDECL_LIST.keys():
             sys.path.append(dictPath)
             from allcdict_param import dict
@@ -702,11 +682,19 @@ def write_c_format_output_file(outfile,allDictPath):
             if CSearchDict.get(key)!=None:
                 if isinstance(CSearchDict.get(key),list):
                     funcs= CSearchDict.get(key)
+                    if re.search('\.\.\.',funcs[1]):
+                        VPC_count=VPC_count+1
                     s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
                     s.write("\n")
             else:
                 print(key)
                 print(" unable to supplement\n")
+        
+        FPC_count=len(GLIBC_FUNCDECL_LIST)-VPC_count
+        print("\nVPC solver count\n")
+        print(VPC_count)
+        print("\nFPC solver count\n")
+        print(FPC_count)
 
 
 def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
@@ -718,7 +706,7 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
     with open(outfile, "w") as s:
         #Write the include header file first
         s.write(libcxx_header)
-
+        VPC_count=0
         for key in GLIBC_FUNCDECL_LIST.keys():
             sys.path.append(dictPath)
             from allcxxdict_param import dict
@@ -729,8 +717,8 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
                 for item in list1:
                     if isinstance(item, tuple):
                         if i == len(list1) - 1:
-                            print(item[0])
-                            print(item[1])
+                            if re.search('\.\.\.',item[1]):
+                                VPC_count=VPC_count+1
                             s.write("{0} {1} {2};".format(item[0],key,item[1]))
                             s.write("\n")
                         i=i+1
@@ -740,21 +728,28 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
                 print(key)
                 print(" unable to supplement\n")
 
-
+        MFC_count=0    
         for value in jsonDict["Function"]:
+            MFC_count=MFC_count+1
             value["canBeComplement"]=False
             if value.get("ReturnType") != "":
                 s.write("{0} {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
                 s.write("\n")
                 value["canBeComplement"]=True
+                if re.search('\.\.\.',value.get("Parameters")):                  
+                    VPC_count=VPC_count+1
             elif value.get("isCtorOrDtor") ==True:
                 s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
                 s.write("\n")
                 value["canBeComplement"]=True
+                if re.search('\.\.\.',value.get("Parameters")):                  
+                    VPC_count=VPC_count+1
             elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
                 s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
                 s.write("\n")
                 value["canBeComplement"]=True
+                if re.search('\.\.\.',value.get("Parameters")):                  
+                    VPC_count=VPC_count+1
             else:
                 sys.path.append(dictPath)
                 from allcxxdict_param import dict
@@ -765,14 +760,25 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
                             if funcs[1]==value.get("Parameters"):
                                 s.write("{0} {1} {2};".format(funcs[0],value.get("MangledName"),value.get("Parameters")))
                                 s.write("\n")
-                                value["canBeComplement"]=True    
+                                value["canBeComplement"]=True
+                                if re.search('\.\.\.',value.get("Parameters")):                  
+                                    VPC_count=VPC_count+1    
                     else:
                         s.write("{0} {1} {2};".format(CXXSearchDict.get(value.get("BaseName")),value.get("MangledName"),value.get("Parameters")))
                         s.write("\n")
                         value["canBeComplement"]=True
+                        if re.search('\.\.\.',value.get("Parameters")):                  
+                            VPC_count=VPC_count+1
                 else:
                     print(value.get("MangledName"))
                     print(" unable to supplement\n")
+        print("MFC solver count\n")
+        print(MFC_count)
+        FPC_count=len(GLIBC_FUNCDECL_LIST)+len(jsonDict)-VPC_count
+        print("\nVPC solver count\n")
+        print(VPC_count)
+        print("\nFPC solver count\n")
+        print(FPC_count)
 
 
 
