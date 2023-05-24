@@ -231,7 +231,7 @@ namespace {
                   std::regex printf_pattern("printf");
                   std::string fname=f.getName().str();
                   if (std::regex_match(fname,printf_pattern)) {
-                      printfFunc=&f;;
+                      printfFunc=&f;
                       break;
                     }
                 }
@@ -657,7 +657,20 @@ namespace {
             Name=Name.substr(x+1,sizeof(Name));
             std::size_t x2=Name.find_first_of("_");
             std::string width= GLaName.str().substr(x+1,x2);
-            if(width=="16")
+            int width_int = std::stoi(width);
+
+            // Check the condition
+            //这边是新的解决上面的16，24的方法。深入调研发现，如果中间的数字-16能够被64整除，则取的是XMM*寄存器的前64位，而double类型这前64位就够用了。
+            bool continue_flag=false;
+            if ((width_int - 16) % 64 == 0) {
+              continue_flag=true;
+            } 
+            else {
+              continue;
+
+            }
+
+            if(continue_flag==true)
             {
               switch (num)
               {
@@ -880,7 +893,6 @@ namespace {
                 llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), (rsp_count-sub_offset)*8));
                 Normalparam =Builder.CreateLoad(Builder.CreateIntToPtr(RSP_Stack_offset,llvm::PointerType::get(llvm::Type::getInt64Ty(Context),0)),paramIrName);
                 asm_args.push_back(Normalparam);
-                XMMRegisterCount++;
                 sub_offset--;
                 break;
               }
