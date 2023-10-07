@@ -18,6 +18,7 @@ import re
 import traceback
 import itertools
 import json
+import Levenshtein
 from collections import defaultdict
 # Note: zip has different behaviour between Python 2.x and 3.x.
 # - Using izip ensures compatibility.
@@ -58,6 +59,8 @@ GLIBC_FUNCDECL_LIST = defaultdict(list)
 #A list of functions include from glibc
 GLIBCXX_FUNCDECL_LIST = defaultdict(list)
 
+GFORTRAN_FUNCDECL_LIST = defaultdict(list)
+
 #the libc/libcxx_header must be the same with /dict/libc/libcxx.h
 #things the libs below did't include all the libs,you can add new libs here. 
 
@@ -70,10 +73,20 @@ libcxx_header = """
 #include <locale.h>
 #include <nl_types.h>
 #include <strstream>
+#include <sys/timeb.h>
+#include <sys/stat.h>
+#include <glob.h>
+
+"""
+fortran_header = """
+#include </home/zyl/gcc_build_library/gcc-9.4.0/libgfortran/io/all.h>
+#include </home/zyl/gcc_build_library/gcc-9.4.0/libgfortran/generated/all.h>
+#include </home/zyl/gcc_build_library/gcc-9.4.0/libgfortran/runtime/all.h>
+#include </home/zyl/gcc_build_library/gcc-9.4.0/libgfortran/intrinsics/all.h>
 """
 
-
 libc_header = """
+#define _GNU_SOURCE
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -106,7 +119,9 @@ libc_header = """
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/timeb.h>
 #include <sys/times.h>
+#include<sys/mman.h>
 #include <sys/resource.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -115,6 +130,10 @@ libc_header = """
 #include <getopt.h>
 #include <locale.h>
 #include <nl_types.h>
+#include <glob.h>
+#include <pwd.h>
+#include <execinfo.h>
+#include <fnmatch.h>
 """
 
 
@@ -150,8 +169,20 @@ cORcxx_end = """
 
 SPECIFIC_FUNC = ["__isoc99_fscanf", "__isoc99_scanf","__isoc99_sscanf","__isoc99_vfscanf","__isoc99_vscanf","__isoc99_vsscanf",
 "__isoc99_fwscanf","__isoc99_wscanf","__isoc99_swscanf","__isoc99_vfwscanf","__isoc99_vswscanf",
-"__xpg_strerror_r","__xpg_sigpause","__stack_chk_fail","__fxstat","__xstat","__libc_start_main"]
+"__xpg_strerror_r","__xpg_sigpause","__stack_chk_fail","__fxstat","__xstat","__libc_start_main","__cxa_finalize","__strcat_chk",
+"__vfprintf_chk","__strcpy_chk","__fprintf_chk","__sprintf_chk","__printf_chk","__snprintf_chk","__memcpy_chk","__strncpy_chk","__strncat_chk"
+,"__memset_chk","__asprintf_chk","__fread_chk","__vasprintf_chk","__cxa_atexit","__realpath_chk","__vsnprintf_chk","__longjmp_chk"
+,"__vsprintf_chk","__memmove_chk","__fdelt_chk"]
 
+SECTION_LIST = [".rodata",".data",".comment"]
+
+Template_Dict={
+    #template 名：[替换所要添加的"<>"数量，可替换的具体类型。。。]
+    "_CharT": [0,"char", "wchar_t", "char16_t", "char32_t"],
+    "_Traits": [1,"std::char_traits<char>", "std::char_traits<wchar_t>", "std::char_traits<char16_t>", "std::char_traits<char32_t>"],
+    "_Alloc": [1,"std::allocator<char>", "std::allocator<wchar_t>", "std::allocator<char16_t>", "std::allocator<char32_t>"],
+}
+    
 
 
 # a class which referemce the llvm/Demangle.h，which include the key consept of Demangled Func
@@ -200,61 +231,76 @@ class ReadElf(object):
         """ Display a strings dump of a section. section_spec is either a
             section number or a name.
         """
-        #我们复用readelf的代码读取.comment段里面的内容，当然readelf的源代码中该功能是可以根据段的不同而改变的，
-        #这边写死直接读.comment
-        COMMENT_DETAIL = defaultdict(list)
-        section_spec='.comment'
-        section = self._section_from_spec(section_spec)
-        if section is None:
-            # readelf prints the warning to stderr. Even though stderrs are not compared
-            # in tests, we comply with that behavior.
-            sys.stderr.write('readelf.py: Warning: Section \'%s\' was not dumped because it does not exist!\n' % (
-                section_spec))
-            return
-        if section['sh_type'] == 'SHT_NOBITS':
-            self._emitline("\nSection '%s' has no data to dump." % (
-                section_spec))
-            return
+        #We reuse the code from readelf to read the contents of the .comment section. Of course, this functionality in the readelf source code can be modified based on different sections.
+        #This is the entry point where different sections start to be iterated.
+        #
+        for section_spec in SECTION_LIST:
+                COMMENT_DETAIL = defaultdict(list)
+                section = self._section_from_spec(section_spec)
+                if section is None:
+                    # readelf prints the warning to stderr. Even though stderrs are not compared
+                    # in tests, we comply with that behavior.
+                    sys.stderr.write('readelf.py: Warning: Section \'%s\' was not dumped because it does not exist!\n' % (
+                        section_spec))
+                    return
+                if section['sh_type'] == 'SHT_NOBITS':
+                    self._emitline("\nSection '%s' has no data to dump." % (
+                        section_spec))
+                    return
 
-        self._emitline("\nString dump of section '%s':" % section.name)
+                #self._emitline("\nString dump of section '%s':" % section.name)
 
-        found = False
-        data = section.data()
-        dataptr = 0
+                found = False
+                data = section.data()
+                dataptr = 0
 
-        while dataptr < len(data):
-            while ( dataptr < len(data) and
-                    not (32 <= data[dataptr] <= 127)):
-                dataptr += 1
+                while dataptr < len(data):
+                    while ( dataptr < len(data) and
+                            not (32 <= data[dataptr] <= 127)):
+                        dataptr += 1
 
-            if dataptr >= len(data):
-                break
+                    if dataptr >= len(data):
+                        break
 
-            endptr = dataptr
-            while endptr < len(data) and data[endptr] != 0:
-                endptr += 1
+                    endptr = dataptr
+                    while endptr < len(data) and data[endptr] != 0:
+                        endptr += 1
 
-            found = True
-            key=dataptr
-            detail=bytes2str(data[dataptr:endptr])
-            COMMENT_DETAIL[key].append([dataptr,detail])
-            self._emitline('  [%6x]  %s' % (
-                dataptr, bytes2str(data[dataptr:endptr])))
+                    found = True
+                    key=dataptr
+                    detail=bytes2str(data[dataptr:endptr])
+                    COMMENT_DETAIL[key].append([dataptr,detail])
+                    #self._emitline('  [%6x]  %s' % (
+                    #    dataptr, bytes2str(data[dataptr:endptr])))
 
-            dataptr = endptr
+                    dataptr = endptr
 
-        if not found:
-            self._emitline('  No strings found in .comment,can`t make sure the compiler of the elf file')
-        else:
-            self._emitline()
+                if not found:
+                    self._emitline('  No strings found in .comment,can`t make sure the compiler of the elf file')
+                else:
+                    self._emitline()
+                #This is the display of paths in the .data and .rodata sections
+                if section_spec==".rodata" or section_spec==".data":
+                    DirectPath_pattern=re.compile(r'([a-zA-Z0-9_]+/)+[a-zA-Z0-9_]+')
+                    for key in COMMENT_DETAIL.keys():
+                        comment_values=COMMENT_DETAIL[key]
+                        for det in comment_values:
+                            if re.search(DirectPath_pattern,det[1]) !=None:
+                                print(det[1])
+                    
+
+        #############################################
+        #The upper part is the common parsing section for the opposite end, and below, we begin to separate the processing based on different segments' specific content
+
+
         
-        #若成功读取.comment,接下来对该段进行解析，确定编译器和系统和程序位数
-        #首先获取程序位数
+        #Once successfully reading the .comment section, the next step is to parse it to determine the compiler, system, and program bitness
+        #First, obtain the program's bit count
         header = self.elffile.header
         e_ident = header['e_ident']
-        #ELF32或ELF64   
+        #ELF32 or ELF64   
         Elf_bits=describe_ei_class(e_ident['EI_CLASS'])
-        #然后获取系统架构
+        #Then obtain the system architecture
         Machine_type=describe_e_machine(header['e_machine'])
         if re.search('[x,X]86',Machine_type):
             Machine_type = "X86"
@@ -262,7 +308,7 @@ class ReadElf(object):
             Machine_type ="ARM"
 
 
-        #然后获取操作系统
+        #Then retrieve the operating system
         Ubuntu_pattern=re.compile(r'[U,u]+buntu')
         RedHat_pattern=re.compile(r'[R,r]+ed[ ]*[H.h]at')
         System=None
@@ -274,7 +320,7 @@ class ReadElf(object):
                 if re.search(Ubuntu_pattern,det[1]) !=None:
                     System='Ubuntu'
                     Distribution='Ubuntu'
-                    #确定是Ubuntu之后，还需要确定确定具体版本号
+                    #After confirming that it's Ubuntu, we also need to make sure to determine the specific version number.
                     if re.search('16.04',det[1]) !=None:
                         System=System+"16.04"
                         Version="16.04"
@@ -298,7 +344,7 @@ class ReadElf(object):
             print("System not support")
             sys.exit()
 
-        #再获取编译器
+        #retrieve the compiler 
         Clang_pattern=re.compile(r'[C,c]lang')
         Clang_version_pattern=re.compile(r'clang version [0-9.-]*')
         version_pattern=re.compile(r'[0-9.-]+[.]+[0-9.-]*')
@@ -325,8 +371,7 @@ class ReadElf(object):
             sys.exit()
         
 
-        #到此系统架构+操作系统+架构位数都已经拿到了，下一步开始遍历符号表。
-        print(111)
+        #At this point, the system architecture, operating system, and architecture bitness have all been obtained; the next step is to start traversing the symbol table.
 
         #Anomaly detection that preserves the integrity of the symbol table in the original script
         self._init_versioninfo()
@@ -343,6 +388,7 @@ class ReadElf(object):
         GCCLib_path = os.path.join(GCCLib_path, Machine_type, Distribution, Version)
 
         cpp_flag=False
+        fortran_flag=False
         continue_flag=False
         #an elf file has many sections in smytalbes,like '.dynsym','.symtab',
         # in order to cover most of the extern func，we loop all the sections.
@@ -369,15 +415,31 @@ class ReadElf(object):
                     # There is no clear sign in the elf file that the program is a C++ program. 
                     # Here we judge whether the program is a C++ program by 
                     # checking whether the Name Mangling function exists in the symbol table.
+                    
                     if cpp_flag==False:
                         if symbol.name [0:2]=="_Z":
                             cpp_flag=True
-                    #The elf file on the x86 platform will have a suffix of ***@@GLIBCXX_3.4 
+
+                    if fortran_flag==False:
+                        if symbol.name [0:10]=="_gfortran_":
+                            fortran_flag=True
+                    #The elf file on the x86 platform,which is compileed by gfortran will have a suffix like ***@GFORTRAN_8
+                    # after the thing taken out of .symtab 
+                    libGFortranverson_obj=re.search('@+GFORTRAN[A-Za-z]*_[0-9,.]+',symbol.name)
+                    if libGFortranverson_obj !=None:
+                        funcName=symbol.name[0:libGFortranverson_obj.regs[0][0]]
+                        fortran_name_obj=re.search('_gfortran_',funcName)
+                        funcName=funcName[fortran_name_obj.regs[0][1]:]
+                        key=funcName
+                        GFORTRAN_FUNCDECL_LIST[key].append("1")
+                        continue_flag=True
+                    #The elf file on the x86 platform will have a suffix like ***@@GLIBCXX_3.4 
                     # after the thing taken out of .symtab (one less @ on Arm)
                     libCorCXXverson_obj=re.search('@+GLIBC[A-Za-z]*_[0-9,.]+',symbol.name)
                     if libCorCXXverson_obj !=None:
                         #For the time being, only those with the GLIBC*** logo are processed.
                         funcName=symbol.name[0:libCorCXXverson_obj.regs[0][0]]
+                        print(funcName)
                         libVersionName=symbol.name[libCorCXXverson_obj.regs[0][0]: ]
                         if re.search('GLIBCXX',libVersionName):
                             key=funcName
@@ -414,11 +476,18 @@ class ReadElf(object):
                 #write the Complement.c/cpp
                 abioutfile=os.path.dirname(os.path.abspath(__file__))+"/../Result/"
                 write_cxx_abi_file(abioutfile,json_data,GCCLib_path)
+                write_c_abi_file(abioutfile,GCCLib_path)
                 write_cxx_format_output_file(abioutfile,json_data,GCCLib_path)
+                if fortran_flag==True:
+                    write_fortran_abi_file(abioutfile,GCCLib_path)
+                    write_c_format_output_file(abioutfile,GCCLib_path,fortran_flag)
             else:
                 abioutfile=os.path.dirname(os.path.abspath(__file__))+"/../Result/"
                 write_c_abi_file(abioutfile,GCCLib_path)
-                write_c_format_output_file(abioutfile,GCCLib_path)
+                write_c_format_output_file(abioutfile,GCCLib_path,fortran_flag)
+                if fortran_flag==True:
+                    write_fortran_abi_file(abioutfile,GCCLib_path)
+                    
 
         else:
             print("There was a problem parsing the symbol table. end of program")  
@@ -426,19 +495,35 @@ class ReadElf(object):
         
         #Complement.c/cpp has been generated so far, 
         #and finally the corresponding supplementary LLVMIR is generated
+        #Instructions for converting .c to .bc first
         if cpp_flag == True:
             compiler="clang++"
-            liftingFile=abioutfile+"complement.cpp"
+            liftingcxxFile=abioutfile+"complement.cpp"
+            liftingcFile=abioutfile+"complement.c"
+            LiftGlibcCommand="clang -emit-llvm  -c  "+ liftingcFile+ " -o" +abioutfile+"liftedGlibcComplement.bc"
+            LiftGlibcxxCommand=compiler+ " -emit-llvm  -c  "+ liftingcxxFile+ " -o" +abioutfile+"liftedGlibcxxComplement.bc"
+            print(os.system(LiftGlibcCommand))
+            print(os.system(LiftGlibcxxCommand))
         else:
             compiler="clang"
-            liftingFile=abioutfile+"complement.c"
+            liftingcFile=abioutfile+"complement.c"
+            LiftCommand=compiler+ " -emit-llvm  -c  "+ liftingcFile+ " -o" +abioutfile+"liftedGlibcComplement.bc"
+            print(os.system(LiftCommand))
+            if fortran_flag==True:
+                liftingFile_fortran=abioutfile+"complement_fortran.c"
 
-        LiftCommand=compiler+ " -emit-llvm  -c  "+ liftingFile+ " -o" +abioutfile+"liftedComplement.bc"
-        
-        
-        print(os.system(LiftCommand))
-        LLVMdisCommand="llvm-dis " +abioutfile+"liftedComplement.bc"
-        print(os.system(LLVMdisCommand))    
+        if fortran_flag==True:
+            LiftCommand_fortran=compiler+ " -emit-llvm  -c  "+ liftingFile_fortran+ " -o" +abioutfile+"liftedcomplement_fortran.bc"
+            print(os.system(LiftCommand_fortran))
+
+        LLVMdisCommand="llvm-dis " +abioutfile+"liftedGlibcComplement.bc"
+        print(os.system(LLVMdisCommand))
+        if cpp_flag == True:
+            LLVMdisCommand_cxx="llvm-dis " +abioutfile+"liftedGlibcxxComplement.bc"
+            print(os.system(LLVMdisCommand_cxx))    
+        if fortran_flag==True:
+            LLVMdisCommand_fortran="llvm-dis " +abioutfile+"liftedcomplement_fortran.bc"
+            print(os.system(LLVMdisCommand_fortran))
 
 
 
@@ -568,37 +653,227 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
         s.write(libcxx_header)
             
         s.write(cxx_header1)
+        Miss_this_count=0
         #The first layer of loops traverses FUNCDECL_LIST
         for value in jsonDict["Function"]:
+            if value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSEOS4_" or  value.get("MangledName")=="_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE6setbufEPcl" or value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSERKS4_":
+                value["canBeComplement"]=False
+                continue
             value["canBeComplement"]=False
+            this_param=""
+            if "std::" in value.get("DeclContextName"):
+                Miss_this_count=Miss_this_count+1
+                this_param=value.get("DeclContextName")+" *"
+                if value.get("Parameters")!="()":
+                    this_param=this_param+","
+            
+            params = "("+this_param+value.get("Parameters")[1:]
             if value.get("ReturnType") != "":
-                s.write("{0} {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
+                s.write("{0} {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),params))
                 s.write("\n")
                 value["canBeComplement"]=True
             elif value.get("isCtorOrDtor") ==True:
-                s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
+                s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),params))
                 s.write("\n")
                 value["canBeComplement"]=True
-            elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
-                s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
-                s.write("\n")
-                value["canBeComplement"]=True
+            
+            #elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
+                #s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
+                #s.write("\n")
+                #value["canBeComplement"]=True
             else:
+                if value.get("MangledName") =="_ZNSi5ungetEv":
+                    print(11111)
                 sys.path.append(dictPath)
                 from allcxxdict_param import dict
                 CXXSearchDict=dict.dictionary
+                #Indicated in the dictionary, can be supplemented
                 if CXXSearchDict.get(value.get("BaseName"))!=None:
-                    if isinstance(CXXSearchDict.get(value.get("BaseName")),list):
-                        for funcs in CXXSearchDict.get(value.get("BaseName")):
-                            if funcs[1]==value.get("Parameters"):
-                                s.write("{0} {1} {2};".format(funcs[0],value.get("MangledName"),value.get("Parameters")))
-                                s.write("\n")
-                                value["canBeComplement"]=True    
-                    else:
-                        s.write("{0} {1} {2};".format(CXXSearchDict.get(value.get("BaseName")),value.get("MangledName"),value.get("Parameters")))
+                    if all(isinstance(element, str) for element in CXXSearchDict.get(value.get("BaseName"))):
+                        func=CXXSearchDict.get(value.get("BaseName"))
+                        if isinstance(func,str):
+                            return_param=func
+                        else:
+                            return_param=func[0]
+                        replaceList=[]
+                        #Even in the case of only one return value, a template will still be generated
+                        for key in Template_Dict.keys():
+                            if key in return_param:
+                                replaceList.append(key)
+                        maxsize=0
+                        maxiter=0
+                        for i in range(len(replaceList)):
+                            j=0
+                            for value2 in Template_Dict.get(replaceList[i]):
+                                if j==0:
+                                    j=j+1
+                                    continue
+                                if value2 in value.get("DeclContextName"):
+                                    if(len(value2)>maxsize):
+                                        maxiter=j
+                                        maxsize=len(value2)
+                                        j=j+1
+                                    else:
+                                        j=j+1
+                                        continue
+                                return_param=return_param.replace(replaceList[i],Template_Dict.get(replaceList[i])[maxiter])
+                        s.write("{0} {1} {2};".format(return_param,value.get("MangledName"),params))
                         s.write("\n")
                         value["canBeComplement"]=True
+                    else:
+                        #Here, there is a situation where multiple return values exist
+                        sameParamMultiReturnFlag=0
+                        return_list=[]
+                        template_list=[]
+                        for funcs in CXXSearchDict.get(value.get("BaseName")):
+                            #Here, we first check if the parameters to be matched have a template; if they do, we replace the template before proceeding with the comparison
+                            paramStr=funcs[1]
+                            #if value.get("MangledName") =="_ZNSi5ungetEv":
+                            #        print(11111)
+                            for key in Template_Dict.keys():
+                                if key in paramStr:
+                                    maxsize=0
+                                    maxiter=0
+                                    j=0
+                                    for value2 in Template_Dict.get(key):
+                                        if j==0:
+                                            j=j+1
+                                            continue
+                                        if value2 in value.get("DeclContextName"):
+                                            if(len(value2)>maxsize):
+                                                maxiter=j
+                                                maxsize=len(value2)
+                                                j=j+1
+                                            else:
+                                                j=j+1
+                                                continue
+                                        else:
+                                            maxiter=1
+                                        paramStr =paramStr.replace(key,Template_Dict.get(key)[maxiter])
+                                        if "const char" in paramStr:
+                                            paramStr=paramStr.replace("const char","char const")
+
+                            if compare_types(paramStr,value.get("Parameters")):
+                                return_list.append(funcs[0])
+                                #Template_obj=re.search('<.*>',funcs[0])
+                                for key in Template_Dict.keys():
+                                    if key in funcs[0]:
+                                        template_list.append(funcs[0])
+                                        break
+                                sameParamMultiReturnFlag=sameParamMultiReturnFlag+1
+                                if value.get("MangledName") =="_ZNSi5ungetEv":
+                                    print(sameParamMultiReturnFlag)
+                                    print(len(template_list))
+                        if sameParamMultiReturnFlag!=1:
+                            #Category 1: Template exists in the return list to be matched
+                            if len(template_list)!=0 and re.search('<.*>',value.get("DeclContextName"))!=None:
+                                #Template exists in Decl
+                                for returnStr in template_list:
+                                    matchs_decl=value.get("DeclContextName").count("<")
+                                    matchs_retrun=returnStr.count("<")
+                                    if matchs_retrun > matchs_decl:
+                                        continue
+                                    else:
+                                        replaceList=[]
+                                        for key in Template_Dict.keys():
+                                            if key in returnStr:
+                                                replaceList.append(key)
+                                                matchs_retrun=matchs_retrun+Template_Dict.get(key)[0]
+                                        #First, match the return type by the quantity of <>
+                                        if matchs_retrun==matchs_decl:
+                                            #Once matched, replace the original template with the specific type
+                                            maxsize=0
+                                            maxiter=0
+                                            for i in range(len(replaceList)):
+                                                j=0
+                                                for value2 in Template_Dict.get(replaceList[i]):
+                                                    if j==0:
+                                                        j=j+1
+                                                        continue
+                                                    if value2 in value.get("DeclContextName"):
+                                                        if(len(value2)>maxsize):
+                                                            maxiter=j
+                                                            maxsize=len(value2)
+                                                            j=j+1
+                                                        else:
+                                                            j=j+1
+                                                            continue
+                                                    returnStr=returnStr.replace(replaceList[i],Template_Dict.get(replaceList[i])[maxiter])
+                                            #After replacing 'template' with the specific type here, start writing back   
+                                            s.write("{0} {1} {2};".format(returnStr,value.get("MangledName"),params))
+                                            s.write("\n")
+                                            value["canBeComplement"]=True
+                                            break
+
+                            #Category 2: Template not found in the return list for matching.
+                            else:
+                                #Subcategory 1: Whether there is a return statement identical to Decl
+                                maxSimilarity=0
+                                maxiter=0
+                                for retrunStr in return_list:
+                                    if compare_types(retrunStr,value.get("DeclContextName")) or compare_types(retrunStr,value.get("DeclContextName")+"&"):
+                                        s.write("{0} {1} {2};".format(retrunStr,value.get("MangledName"),value.get("Parameters")))
+                                        s.write("\n")
+                                        value["canBeComplement"]=True
+                                        break
+                                    else:
+                                 #Subcategory 2: No return statement identical to 'Decl,' then similarity matching.
+                                        if value.get("DeclContextName") in retrunStr:
+                                            s.write("{0} {1} {2};".format(retrunStr,value.get("MangledName"),value.get("Parameters")))
+                                            s.write("\n")
+                                            value["canBeComplement"]=True
+                                            break
+                                        else:
+                                            similarity = Levenshtein.ratio(value.get("DeclContextName"),retrunStr)
+                                            if similarity>maxSimilarity:
+                                                maxSimilarity=similarity
+                                                maxiter=return_list.index(retrunStr)
+                                                print(maxSimilarity)
+                                            
+                                
+                                if value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSEOS4_" or  value.get("MangledName")=="_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE6setbufEPcl" or value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSERKS4_":
+                                    value["canBeComplement"]=False
+                                    continue
+                                print(value.get("MangledName"))
+                                value["canBeComplement"]=True
+                                s.write("{0} {1} {2};".format(return_list[maxiter],value.get("MangledName"),value.get("Parameters")))
+                                s.write("\n")
+                                print(value.get("MangledName"))
+                                print(" similar to supplement\n")
+                            
+                            #s.write("{0} {1} {2};".format(funcs[0],value.get("MangledName"),value.get("Parameters")))
+                            #s.write("\n")
+                            #value["canBeComplement"]=True   
+                        #If only one type of return value is matched, first check if there is a template in 'return.' If there is none, return directly; otherwise, replace the template
+                        else:
+                            returnStr=return_list[0]
+                            for key in Template_Dict.keys():
+                                if key in returnStr:
+                                    maxsize=0
+                                    maxiter=0
+                                    j=0
+                                    for value2 in Template_Dict.get(key):
+                                        if j==0:
+                                            j=j+1
+                                            continue
+                                        if value2 in value.get("DeclContextName"):
+                                            if(len(value2)>maxsize):
+                                                maxiter=j
+                                                maxsize=len(value2)
+                                                j=j+1
+                                            else:
+                                                j=j+1
+                                                continue
+                                        returnStr =returnStr.replace(key,Template_Dict.get(key)[maxiter])
+                                        if "const char" in paramStr:
+                                            paramStr=paramStr.replace("const char","char const")
+                            
+                            s.write("{0} {1} {2};".format(returnStr,value.get("MangledName"),params))
+                            s.write("\n")
+                            value["canBeComplement"]=True
+                            continue 
                 else:
+                    value["canBeComplement"]=False
                     print(value.get("MangledName"))
                     print(" unable to supplement\n")
         
@@ -606,26 +881,13 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
 
 
         for value in jsonDict["Function"]:
+            print(value.get("MangledName"))
             if value["canBeComplement"]==True:
                 s.write("(void *) {0},".format(value["MangledName"]))
                 s.write("\n")
-        for key in GLIBC_FUNCDECL_LIST.keys():
-            sys.path.append(dictPath)
-            from allcxxdict_param import dict
-            CXXSearchDict=dict.dictionary
-            if CXXSearchDict.get(key)!=None:
-                list2  =CXXSearchDict.get(key)
-                if isinstance(list2[0], tuple):
-                    print(key)
-                    print(" unable to supplement in LLVM IR\n")
-                else:
-                    s.write("(void *) {0},".format(key))
-                    s.write("\n")
-            #else:
-                #print(key)
-                #print(" unable to supplement\n")
 
-
+        print("\nMiss this count")
+        print(Miss_this_count)
         s.write(cORcxx_end)
 
 def write_c_abi_file(outfile,allDictPath):
@@ -659,22 +921,54 @@ def write_c_abi_file(outfile,allDictPath):
                 s.write("\n")
             else:
                 print(key)
-                print(" unable to supplement\n")
-
-
+                print(" unable to supplement\n")      
         s.write(cORcxx_end)
 
 
-def write_c_format_output_file(outfile,allDictPath):
-
+def write_fortran_abi_file(outfile,allDictPath):
 
     # generate the abi lib cc file
-    outfile=outfile+"complement_formatc.c"
+    outfile=outfile+"complement_fortran.c"
     dictPath=allDictPath
     with open(outfile, "w") as s:
         #Write the include header file first
-        s.write(libc_header)
+        s.write(fortran_header)
+        s.write(c_header)
+        for key in GFORTRAN_FUNCDECL_LIST.keys():
+                s.write("(void *) {0},".format(key))
+                s.write("\n")       
+        s.write(cORcxx_end)
+
+
+def write_c_format_output_file(outfile,allDictPath,fortran_flag):
+
+
+    # generate the abi lib cc file
+    outfile=outfile+"complement_format.c"
+    dictPath=allDictPath
+    with open(outfile, "w") as s:
+        #Write the include header file first
         VPC_count=0
+        s.write(libc_header)
+        if fortran_flag==True:
+            s.write(fortran_header)
+            for key in GFORTRAN_FUNCDECL_LIST.keys():
+                sys.path.append(dictPath)
+                from allFortrandict_param import dict
+                CSearchDict=dict.dictionary
+                if CSearchDict.get(key)!=None:
+                    if isinstance(CSearchDict.get(key),list):
+                        funcs= CSearchDict.get(key)
+                        if re.search('\.\.\.',funcs[1]):
+                            print("VPC")
+                            print(key)
+                            VPC_count=VPC_count+1
+                        s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
+                        s.write("\n")
+                else:
+                    print(key)
+                    print(" unable to supplement\n")
+
         for key in GLIBC_FUNCDECL_LIST.keys():
             sys.path.append(dictPath)
             from allcdict_param import dict
@@ -683,18 +977,23 @@ def write_c_format_output_file(outfile,allDictPath):
                 if isinstance(CSearchDict.get(key),list):
                     funcs= CSearchDict.get(key)
                     if re.search('\.\.\.',funcs[1]):
+                        print("VPC")
+                        print(key)
                         VPC_count=VPC_count+1
                     s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
                     s.write("\n")
             else:
                 print(key)
-                print(" unable to supplement\n")
+                print(" unable to supplement\n")        
         
-        FPC_count=len(GLIBC_FUNCDECL_LIST)-VPC_count
-        print("\nVPC solver count\n")
+        FPC_count=len(GFORTRAN_FUNCDECL_LIST)+len(GLIBC_FUNCDECL_LIST)-VPC_count
+        print("\nVPC solver count")
         print(VPC_count)
-        print("\nFPC solver count\n")
+        print("\nFPC solver count")
         print(FPC_count)
+        print("\ntotal count")
+        print(FPC_count+VPC_count)
+
 
 
 def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
@@ -707,83 +1006,240 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
         #Write the include header file first
         s.write(libcxx_header)
         VPC_count=0
+                #First, write the '__' function that C++ doesn't recognize
         for key in GLIBC_FUNCDECL_LIST.keys():
             sys.path.append(dictPath)
-            from allcxxdict_param import dict
-            CXXSearchDict=dict.dictionary
-            if CXXSearchDict.get(key)!=None:
-                list1 =CXXSearchDict.get(key)
-                i=0
-                for item in list1:
-                    if isinstance(item, tuple):
-                        if i == len(list1) - 1:
-                            if re.search('\.\.\.',item[1]):
-                                VPC_count=VPC_count+1
-                            s.write("{0} {1} {2};".format(item[0],key,item[1]))
-                            s.write("\n")
-                        i=i+1
-                    else :
-                        continue    
+            from allcdict_param import dict
+            CSearchDict=dict.dictionary
+            if CSearchDict.get(key)!=None:
+                if isinstance(CSearchDict.get(key),list):
+                    funcs= CSearchDict.get(key)
+                    s.write("{0} {1} {2};".format(funcs[0],key,funcs[1]))
+                    if re.search('\.\.\.',funcs[1]):
+                            VPC_count=VPC_count+1
+                    s.write("\n")
             else:
                 print(key)
                 print(" unable to supplement\n")
 
-        MFC_count=0    
+        MFC_count=0 
+        HasReturn_count=0  
         for value in jsonDict["Function"]:
+            if value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSEOS4_" or  value.get("MangledName")=="_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE6setbufEPcl" or value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSERKS4_":
+                value["canBeComplement"]=False
+                continue
             MFC_count=MFC_count+1
-            value["canBeComplement"]=False
+            if re.search('\.\.\.',value.get("Parameters")):
+                VPC_count=VPC_count+1
             if value.get("ReturnType") != "":
+                HasReturn_count=HasReturn_count+1
                 s.write("{0} {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
                 s.write("\n")
-                value["canBeComplement"]=True
-                if re.search('\.\.\.',value.get("Parameters")):                  
-                    VPC_count=VPC_count+1
             elif value.get("isCtorOrDtor") ==True:
                 s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),value.get("Parameters")))
                 s.write("\n")
-                value["canBeComplement"]=True
-                if re.search('\.\.\.',value.get("Parameters")):                  
-                    VPC_count=VPC_count+1
-            elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
-                s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
-                s.write("\n")
-                value["canBeComplement"]=True
-                if re.search('\.\.\.',value.get("Parameters")):                  
-                    VPC_count=VPC_count+1
             else:
                 sys.path.append(dictPath)
                 from allcxxdict_param import dict
                 CXXSearchDict=dict.dictionary
+                #Explanation is in the dictionary, can be supplemented
                 if CXXSearchDict.get(value.get("BaseName"))!=None:
-                    if isinstance(CXXSearchDict.get(value.get("BaseName")),list):
-                        for funcs in CXXSearchDict.get(value.get("BaseName")):
-                            if funcs[1]==value.get("Parameters"):
-                                s.write("{0} {1} {2};".format(funcs[0],value.get("MangledName"),value.get("Parameters")))
-                                s.write("\n")
-                                value["canBeComplement"]=True
-                                if re.search('\.\.\.',value.get("Parameters")):                  
-                                    VPC_count=VPC_count+1    
-                    else:
-                        s.write("{0} {1} {2};".format(CXXSearchDict.get(value.get("BaseName")),value.get("MangledName"),value.get("Parameters")))
+                    if all(isinstance(element, str) for element in CXXSearchDict.get(value.get("BaseName"))):
+                        func=CXXSearchDict.get(value.get("BaseName"))
+                        if isinstance(func,str):
+                            return_param=func
+                        else:
+                            return_param=func[0]
+                        replaceList=[]
+                        #Even if there is only one return value, template will still appear
+                        for key in Template_Dict.keys():
+                            if key in return_param:
+                                replaceList.append(key)
+                        maxsize=0
+                        maxiter=0
+                        for i in range(len(replaceList)):
+                            j=0
+                            for value2 in Template_Dict.get(replaceList[i]):
+                                if j==0:
+                                    j=j+1
+                                    continue
+                                if value2 in value.get("DeclContextName"):
+                                    if(len(value2)>maxsize):
+                                        maxiter=j
+                                        maxsize=len(value2)
+                                        j=j+1
+                                    else:
+                                        j=j+1
+                                        continue
+                                return_param=return_param.replace(replaceList[i],Template_Dict.get(replaceList[i])[maxiter])
+                        s.write("{0} {1} {2};".format(return_param,value.get("MangledName"),value.get("Parameters")))
                         s.write("\n")
-                        value["canBeComplement"]=True
-                        if re.search('\.\.\.',value.get("Parameters")):                  
-                            VPC_count=VPC_count+1
+                    else:
+                        #Here comes the situation where there are multiple return values
+                        sameParamMultiReturnFlag=0
+                        return_list=[]
+                        template_list=[]
+                        for funcs in CXXSearchDict.get(value.get("BaseName")):
+                            #Here, first determine whether the parameters to be matched exist in a Template. If so, replace the template first and then compare.
+                            paramStr=funcs[1]
+                            for key in Template_Dict.keys():
+                                if key in paramStr:
+                                    maxsize=0
+                                    maxiter=0
+                                    j=0
+                                    for value2 in Template_Dict.get(key):
+                                        if j==0:
+                                            j=j+1
+                                            continue
+                                        if value2 in value.get("DeclContextName"):
+                                            if(len(value2)>maxsize):
+                                                maxiter=j
+                                                maxsize=len(value2)
+                                                j=j+1
+                                            else:
+                                                j=j+1
+                                                continue
+                                        else:
+                                            maxiter=1
+                                        paramStr =paramStr.replace(key,Template_Dict.get(key)[maxiter])
+                                        if "const char" in paramStr:
+                                            paramStr=paramStr.replace("const char","char const")
+
+                            if compare_types(paramStr,value.get("Parameters")):
+                                if value.get("MangledName") =="_ZNSi5ungetEv":
+                                    print(11111)
+                                return_list.append(funcs[0])
+                                for key in Template_Dict.keys():
+                                    if key in funcs[0]:
+                                        template_list.append(funcs[0])
+                                        break
+                                sameParamMultiReturnFlag=sameParamMultiReturnFlag+1
+                                if value.get("MangledName") =="_ZNSi5ungetEv":
+                                    print(sameParamMultiReturnFlag)
+                                    print(len(template_list))
+                        if sameParamMultiReturnFlag!=1:
+                            #Category 1: template exists in the return list to be matched
+                            if len(template_list)!=0 and re.search('<.*>',value.get("DeclContextName"))!=None:
+                                #template exists in Decl
+                                for returnStr in template_list:
+                                    matchs_decl=value.get("DeclContextName").count("<")
+                                    matchs_retrun=returnStr.count("<")
+                                    if matchs_retrun > matchs_decl:
+                                        continue
+                                    else:
+                                        replaceList=[]
+                                        for key in Template_Dict.keys():
+                                            if key in returnStr:
+                                                replaceList.append(key)
+                                                matchs_retrun=matchs_retrun+Template_Dict.get(key)[0]
+                                        #First match the return type by the number of <>
+                                        if matchs_retrun==matchs_decl:
+                                            #After matching, the original Template must be replaced with a specific type.
+                                            maxsize=0
+                                            maxiter=0
+                                            for i in range(len(replaceList)):
+                                                j=0
+                                                for value2 in Template_Dict.get(replaceList[i]):
+                                                    if j==0:
+                                                        j=j+1
+                                                        continue
+                                                    if value2 in value.get("DeclContextName"):
+                                                        if(len(value2)>maxsize):
+                                                            maxiter=j
+                                                            maxsize=len(value2)
+                                                            j=j+1
+                                                        else:
+                                                            j=j+1
+                                                            continue
+                                                    returnStr=returnStr.replace(replaceList[i],Template_Dict.get(replaceList[i])[maxiter])
+                                            #After replacing the template with a specific type, start writing back
+                                            s.write("{0} {1} {2};".format(returnStr,value.get("MangledName"),value.get("Parameters")))
+                                            s.write("\n")
+                                            value["canBeComplement"]=True
+                                            break
+
+                            #Category 2: template does not exist in the return list to be matched
+                            else:
+                                #Subcategory 1: Is there the same return as in Decl?
+                                maxSimilarity=0
+                                maxiter=0
+                                for retrunStr in return_list:
+                                    if compare_types(retrunStr,value.get("DeclContextName")) or compare_types(retrunStr,value.get("DeclContextName")+"&"):
+                                        s.write("{0} {1} {2};".format(retrunStr,value.get("MangledName"),value.get("Parameters")))
+                                        s.write("\n")
+                                        value["canBeComplement"]=True
+                                        break
+                                    else:
+                                 #Subcategory 2: If there is no return identical to the one in Decl, the similarity matches
+                                        if value.get("DeclContextName") in retrunStr:
+                                            s.write("{0} {1} {2};".format(retrunStr,value.get("MangledName"),value.get("Parameters")))
+                                            s.write("\n")
+                                            value["canBeComplement"]=True
+                                            break
+                                        else:
+                                            similarity = Levenshtein.ratio(value.get("DeclContextName"),retrunStr)
+                                            if similarity>maxSimilarity:
+                                                maxSimilarity=similarity
+                                                maxiter=return_list.index(retrunStr)
+                                                print(maxSimilarity)
+                                            
+                                
+                                if value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSEOS4_" or  value.get("MangledName")=="_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE6setbufEPcl" or value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSERKS4_":
+                                    value["canBeComplement"]=False
+                                    continue
+                                value["canBeComplement"]=True
+                                s.write("{0} {1} {2};".format(return_list[maxiter],value.get("MangledName"),value.get("Parameters")))
+                                s.write("\n")
+                                print(value.get("MangledName"))
+                                print(" similar to supplement\n")
+                        #If only one return value is matched, first determine whether there is a template in retrun. If not, return directly. If there is, you need to replace the template.
+                        else:
+                            returnStr=return_list[0]
+                            for key in Template_Dict.keys():
+                                if key in returnStr:
+                                    maxsize=0
+                                    maxiter=0
+                                    j=0
+                                    for value2 in Template_Dict.get(key):
+                                        if j==0:
+                                            j=j+1
+                                            continue
+                                        if value2 in value.get("DeclContextName"):
+                                            if(len(value2)>maxsize):
+                                                maxiter=j
+                                                maxsize=len(value2)
+                                                j=j+1
+                                            else:
+                                                j=j+1
+                                                continue
+                                        returnStr =returnStr.replace(key,Template_Dict.get(key)[maxiter])
+                                        if "const char" in paramStr:
+                                            paramStr=paramStr.replace("const char","char const")
+                            
+                            s.write("{0} {1} {2};".format(returnStr,value.get("MangledName"),value.get("Parameters")))
+                            s.write("\n")
+                            continue 
                 else:
+                    value["canBeComplement"]=False
                     print(value.get("MangledName"))
                     print(" unable to supplement\n")
-        print("MFC solver count\n")
+        print("MFC solver count")
         print(MFC_count)
+        print("Has Retrun type count")
+        print(HasReturn_count)
         FPC_count=len(GLIBC_FUNCDECL_LIST)+len(jsonDict)-VPC_count
-        print("\nVPC solver count\n")
+        print("\nVPC solver count")
         print(VPC_count)
-        print("\nFPC solver count\n")
+        print("\nFPC solver count")
         print(FPC_count)
+        print("\ntotal count")
+        print(VPC_count+FPC_count+MFC_count)
 
 
 
 
-
+def compare_types(type1, type2):
+    return type1.replace(" ", "") == type2.replace(" ", "")
 
 def write_json_file(outfile):
     """ Generate json library source for the Demangling tools; 
@@ -791,7 +1247,7 @@ def write_json_file(outfile):
     with open(outfile, "w") as s:
         s.truncate()
         s.write(json_header)
-        #遍历GLIBCXX_FUNCDECL_LIST
+        #Traverse GLIBCXX_FUNCDECL_LIST
         i=0
         num=len(GLIBCXX_FUNCDECL_LIST)
         for key in GLIBCXX_FUNCDECL_LIST.keys():

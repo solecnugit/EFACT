@@ -1,8 +1,8 @@
 # EFACT: an External Function Auto-Completion Tool to  Strengthen the Static Binary Lifting
 
-EFACT is an External Functions Auto-completion tool. External functions are those functions that are dynamically linked and referenced from header files. (such as libc, libstdc++)
+EFACT is an External Functions Auto-completion tool. External functions are those functions that are dynamically linked and referenced from header files. (such as libc, libstdc++,libgfortran)
 
-the input of this tool is an elf file, and the output is a llvm IR format and C/C+ format file which include the completed external functions' definations. 
+the input of this tool is an elf file, and the output is a llvm IR format and C/C++ program format file which include the completed external functions' definations. 
 
 to use this tool ,you have to make sure the gcc version on your platform is larger than the targeting elf file(we recommend install the latest gcc on your computer).
 
@@ -45,6 +45,9 @@ to use this tool,you have to install :
         |-- dict_example
         |-- openssl
         |-- llvm_pass_for_VPC
+            |--printfPass.cpp  #a pass to resolve the printf VPC.
+            |--va_listPass.cpp - #a pass to address the va_list VPC between ISAs.
+            |--va_listHelperFunc.cpp - #the source file for helper functions
 
 
 
@@ -60,7 +63,10 @@ $ python EFACT.py -complement ../test/X86/MotivatingExample
 ```
 4.the outputfile will generated in the 'Result' directory
 
-
+**for Fortran source program, we recommand you to add the following path to you CPATH environment:
+```bash
+CPATH="<path-to-built gcc>/libgfortran/:<path-to-built gcc>/:<path-to-built gcc>/build/x86_64-pc-linux-gnu/libgfortran/:<path-to-built gcc>/libquadmath/:<path-to-built gcc>/libgcc/:<path-to-built gcc>/build/x86_64-pc-linux-gnu/libgcc/:<path-to-built gcc>/libbacktrace/:<path-to-built gcc>/build/libbacktrace/" 
+```
 
 
 ## Detailed introduction of other parts

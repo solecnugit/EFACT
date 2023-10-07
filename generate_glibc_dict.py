@@ -18,6 +18,17 @@
 # the original script have some bugs, and can't solve the Name Mangling problem.
 # this scipt is part of the External Function auto-completion, it's goal is to loop 
 # over the AST tree of given head file, and generate a dict that can be used for the auto-completion
+
+
+#The source code of gfortran is different from that of glibc, libgccxx. Its code structure
+#is not well-organized. Instead of properly encapsulating, many function declarations and 
+#definitions are written directly in the .c files rather than being first declared in the .h 
+#files and then defined in detail in the .c files. This requires us to extract commonly used 
+#gfortran library functions ourselves and filter out redeclared variables in multiple .c files. 
+#The current implementation steps are:
+#(1) Use the cproto tool to extract the function prototype from the current .c file.
+#(2) Integrate the header files from multiple .c files.
+#(3) Merge the contents extracted in steps (1) and (2)."
 from encodings import utf_8
 import imp
 import os
@@ -107,22 +118,22 @@ def visit_func_decl(node):
   except ImportError:
     return
   #Here, traverse the nodes in the AST tree and find FUNCTION_DECL, which is the function node
-  if node.kind == CursorKind.FUNCTION_DECL:
+  if node.kind == CursorKind.FUNCTION_DECL or node.kind == CursorKind.CXX_METHOD:
+    if node.spelling =="c_str":
+      print(node.displayname)
+      
     func_name = node.spelling
-    node.result_type.spelling
     mangled_name = node.spelling
-    if node.spelling=="cacos":
-      print("111")
     parameters_obj=re.search('[(].*[)]',node.displayname)
     parameters=parameters_obj.string[parameters_obj.regs[0][0]:parameters_obj.regs[0][1]]
 
       
-    if not is_blacklisted_func(mangled_name):
-      func_type = process_function_types(node.type.spelling)
+    #if not is_blacklisted_func(mangled_name):
+      #func_type = process_function_types(node.type.spelling)
       #if is_valid_type(func_type):
                
-      key=mangled_name
-      FUNCDECL_LIST[key].append([mangled_name,node.result_type.spelling,parameters])
+    key=mangled_name
+    FUNCDECL_LIST[key].append([mangled_name,node.result_type.spelling,parameters])
       #else:
         #FUNCDECL_LIST[func_name].append([mangled_name, 'void *', node.location,func_name])
 
@@ -185,16 +196,38 @@ def write_cxx_file(hfile, outfile):
       type_values = FUNCDECL_LIST[key]
       #The second layer of loop, get the function name
       #some funcs may have mutiple returns, we use a list to store all the returns with it's params
+      same_flag=false
       if len(type_values)!=1:
-        num=1
-        s.write("\"{0}\":[".format(key))
-        for func in type_values:
-          #func[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
-          s.write("(\"{0}\",\"{1}\")".format(func[1],func[2]))
-          if num !=len(type_values):
-            s.write(",")
-            num=num+1
-        s.write("],\n")
+        ilen=0
+        for func_type in type_values:
+            print(func_type)
+            if ilen==0:
+                temp = func_type[ilen]
+                ilen+=1            
+                continue
+            if func_type[0] == temp:
+                if ilen==len(type_values)-1:
+                    same_flag=true
+                    break
+                else:
+                    ilen+=1
+                    continue
+            else:
+                break
+        if same_flag:
+          for type in type_values:      
+        #type[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
+            s.write("\"{0}\":\"{1}\",\n".format(type[0],type[1]))
+        else:
+          num=1
+          s.write("\"{0}\":[".format(key))
+          for func in type_values:
+            #func[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
+            s.write("(\"{0}\",\"{1}\")".format(func[1],func[2]))
+            if num !=len(type_values):
+              s.write(",")
+              num=num+1
+          s.write("],\n")
       else:
         for type in type_values:      
         #type[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
@@ -213,25 +246,63 @@ def write_cxx_file_with_params(hfile, outfile):
   with open(outfile, "w") as s:
     s.write(py_header1)
     #The first layer of loops traverses FUNCDECL_LIST
+    count=0
     for key in FUNCDECL_LIST.keys():
       type_values = FUNCDECL_LIST[key]
       #The second layer of loop, get the function name
       #some funcs may have mutiple returns, we use a list to store all the returns with it's params
+      #Here are the return value-parameter pairs in multiple situations, but the return values are all the same, and they are unified and merged here.
+      same_flag=0
       if len(type_values)!=1:
-        num=1
-        s.write("\"{0}\":[".format(key))
-        for func in type_values:
-          #func[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
-          s.write("(\"{0}\",\"{1}\")".format(func[1],func[2]))
-          if num !=len(type_values):
-            s.write(",")
+        ilen=0
+        for func_type in type_values:
+            if ilen==0:
+                temp = func_type[1]
+                ilen+=1            
+                continue
+            if func_type[1] == temp:
+                if ilen==len(type_values)-1:
+                    same_flag=1
+                    break
+                else:
+                    ilen+=1
+                    continue
+            else:
+                break
+        if same_flag==1:
+          for type in type_values:      
+        #type[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
+            s.write("\"{0}\":\"{1}\",\n".format(type[0],type[1]))
+            same_flag=0
+            count+=1
+            break
+        else:
+          num=1
+          s.write("\"{0}\":[".format(key))
+          first_re=""
+          first_para=""
+          for func in type_values:
+            if num <=len(type_values) and num!=1:
+              if func[1]==first_re and func[2]==first_para:
+                num=num+1
+                continue
+              else:
+                s.write(",")
+            #func[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
+            s.write("(\"{0}\",\"{1}\")".format(func[1],func[2]))
+            first_re=func[1]
+            first_para=func[2]
             num=num+1
-        s.write("],\n")
+            #if num !=len(type_values):
+            #  s.write(",")
+            #  num=num+1
+          s.write("],\n")
       else:
         for type in type_values:      
         #type[0,1,2] points to [mangled_name, node.result_type.spelling, parameters]
           s.write("\"{0}\":[\"{1}\",\"{2}\"],\n".format(type[0],type[1],type[2]))
-          
+      
+    print(count)
     s.write(py_end1)
 
     print("Number of functions: {}".format(len(FUNCDECL_LIST)))
