@@ -439,7 +439,6 @@ class ReadElf(object):
                     if libCorCXXverson_obj !=None:
                         #For the time being, only those with the GLIBC*** logo are processed.
                         funcName=symbol.name[0:libCorCXXverson_obj.regs[0][0]]
-                        print(funcName)
                         libVersionName=symbol.name[libCorCXXverson_obj.regs[0][0]: ]
                         if re.search('GLIBCXX',libVersionName):
                             key=funcName
@@ -457,9 +456,9 @@ class ReadElf(object):
                 outfile=DemangleToolsPath+"in.json"
                 #First hand over the recognized mangled function to the 
                 #C++ internal interface of llvm for processing
-                print("Demang number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
-                print("Demang number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
-                print("Demang number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
+                print("Demangle number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
+                print("Demangle number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
+                print("Demangle number is "+str(len(GLIBCXX_FUNCDECL_LIST))+"\n")
                 write_json_file(outfile)
                 
                 print("start to write in.json (if 0 success) ")
@@ -676,14 +675,7 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
                 s.write("void {1} {2};".format(value.get("ReturnType"),value.get("MangledName"),params))
                 s.write("\n")
                 value["canBeComplement"]=True
-            
-            #elif re.search('std::[A-Za-z]+',value.get("DeclContextName")):
-                #s.write("{0} {1} {2};".format(value.get("DeclContextName"),value.get("MangledName"),value.get("Parameters")))
-                #s.write("\n")
-                #value["canBeComplement"]=True
             else:
-                if value.get("MangledName") =="_ZNSi5ungetEv":
-                    print(11111)
                 sys.path.append(dictPath)
                 from allcxxdict_param import dict
                 CXXSearchDict=dict.dictionary
@@ -728,8 +720,6 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
                         for funcs in CXXSearchDict.get(value.get("BaseName")):
                             #Here, we first check if the parameters to be matched have a template; if they do, we replace the template before proceeding with the comparison
                             paramStr=funcs[1]
-                            #if value.get("MangledName") =="_ZNSi5ungetEv":
-                            #        print(11111)
                             for key in Template_Dict.keys():
                                 if key in paramStr:
                                     maxsize=0
@@ -761,9 +751,6 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
                                         template_list.append(funcs[0])
                                         break
                                 sameParamMultiReturnFlag=sameParamMultiReturnFlag+1
-                                if value.get("MangledName") =="_ZNSi5ungetEv":
-                                    print(sameParamMultiReturnFlag)
-                                    print(len(template_list))
                         if sameParamMultiReturnFlag!=1:
                             #Category 1: Template exists in the return list to be matched
                             if len(template_list)!=0 and re.search('<.*>',value.get("DeclContextName"))!=None:
@@ -834,7 +821,7 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
                                 if value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSEOS4_" or  value.get("MangledName")=="_ZNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE6setbufEPcl" or value.get("MangledName")=="_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEaSERKS4_":
                                     value["canBeComplement"]=False
                                     continue
-                                print(value.get("MangledName"))
+                                #print(value.get("MangledName"))
                                 value["canBeComplement"]=True
                                 s.write("{0} {1} {2};".format(return_list[maxiter],value.get("MangledName"),value.get("Parameters")))
                                 s.write("\n")
@@ -881,7 +868,6 @@ def write_cxx_abi_file(outfile,jsonDict,allDictPath):
 
 
         for value in jsonDict["Function"]:
-            print(value.get("MangledName"))
             if value["canBeComplement"]==True:
                 s.write("(void *) {0},".format(value["MangledName"]))
                 s.write("\n")
@@ -1106,17 +1092,12 @@ def write_cxx_format_output_file(outfile,jsonDict,allDictPath):
                                             paramStr=paramStr.replace("const char","char const")
 
                             if compare_types(paramStr,value.get("Parameters")):
-                                if value.get("MangledName") =="_ZNSi5ungetEv":
-                                    print(11111)
                                 return_list.append(funcs[0])
                                 for key in Template_Dict.keys():
                                     if key in funcs[0]:
                                         template_list.append(funcs[0])
                                         break
                                 sameParamMultiReturnFlag=sameParamMultiReturnFlag+1
-                                if value.get("MangledName") =="_ZNSi5ungetEv":
-                                    print(sameParamMultiReturnFlag)
-                                    print(len(template_list))
                         if sameParamMultiReturnFlag!=1:
                             #Category 1: template exists in the return list to be matched
                             if len(template_list)!=0 and re.search('<.*>',value.get("DeclContextName"))!=None:
