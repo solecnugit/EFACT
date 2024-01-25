@@ -36,6 +36,7 @@
 #include <sys/times.h>
 #include<sys/mman.h>
 #include <sys/resource.h>
+#include <sys/select.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <dirent.h>
@@ -47,6 +48,7 @@
 #include <pwd.h>
 #include <execinfo.h>
 #include <fnmatch.h>
+#include <dlfcn.h>
 // OpenSSL
 #include <openssl/aes.h>
 #include <openssl/asn1.h>
@@ -120,5 +122,4 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
-
 

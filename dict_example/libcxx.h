@@ -12,3 +12,5 @@
 #include <sys/timeb.h>
 #include <sys/stat.h>
 #include <glob.h>
+#include <cxxabi.h>
+#include <string.h>

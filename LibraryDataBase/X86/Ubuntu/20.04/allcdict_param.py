@@ -9293,5 +9293,9 @@ class dict:
 "__memmove_chk":["void *","(void * dest, const void * src, size_t len, size_t destlen)"],
 "__fdelt_chk":["long int","(long int d)"],
 "__isoc99_scanf":["int","(const char *format, ...)"],
+"dlopen":["void *","(const char *, int)"],
+"dlclose":["int","(void *)"],
+"dlsym":["void *","(void *restrict, const char *restrict)"],
+"dlerror":["char *","()"],
   }
 

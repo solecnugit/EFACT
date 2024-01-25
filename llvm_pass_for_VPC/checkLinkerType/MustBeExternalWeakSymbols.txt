@@ -1,0 +1,2 @@
+_ITM_deregisterTMCloneTable
+_ITM_registerTMCloneTable

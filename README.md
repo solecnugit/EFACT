@@ -48,6 +48,7 @@ to use this tool,you have to install :
             |--printfPass.cpp  #a pass to resolve the printf VPC.
             |--va_listPass.cpp - #a pass to address the va_list VPC between ISAs.
             |--va_listHelperFunc.cpp - #the source file for helper functions
+            |--dlopen/symPass.cpp - #Passes to resolve the function loaded by dlopen/sym.
 
 
 
