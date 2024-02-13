@@ -241,7 +241,7 @@ namespace {
                     Function &f = *mi;
                     std::string fname=f.getName().str();
                     //不同函数的正则匹配规则
-                    std::regex extPrintf_pattern("ext_[0-9]*_printf");
+                    std::regex extPrintf_pattern("ext_[0-9a-z]*_printf");
                     std::regex rdi_pattern("RDI_[0-9a-z]*_[0-9a-z]*");
                     std::regex register_pattern("[A-Z0-9]*_[0-9a-z]*_[0-9a-z]*");
                     std::regex data_pattern("data_[0-9a-z]*");
