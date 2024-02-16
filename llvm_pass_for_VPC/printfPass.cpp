@@ -120,6 +120,7 @@ namespace {
 
 
   std::map<std::string,std::string> printf_format_map ={
+    {"i","int"},
     {"d","int"},{"hhd","signed char"},{"hd","	short int"},{"ld","long int"},{"lld","long long int"},{"jd","intmax_t"},{"zd","size_t"},{"td","ptrdiff_t"},
     {"o","unsigned int"},{"hho","unsigned char"},{"ho","unsigned short int"},{"lo","unsigned long int"},{"llo","unsigned long long int"},{"jo","uintmax_t"},{"zo","size_t"},{"to","ptrdiff_t"},
     {"u","unsigned int"},{"hhu","unsigned char"},{"hu","unsigned short int"},{"lu","unsigned long int"},{"llu","unsigned long long int"},{"ju","uintmax_t"},{"zu","size_t"},{"tu","ptrdiff_t"},
@@ -421,17 +422,23 @@ namespace {
                           llvm::StringRef str=sub_arrray->getAsString();
                           llvm::StringRef line_break="\n";
                           str=str.substr(size);
+                          errs() << "待匹配的字符串为："<< "\n";
+                          errs() << str<< "\n";
                           //因为substr截取后的字符串并不会在换行符处停下，故这边人工处理一下
                           //先转换成string类型
                           std::string sst=str.str();
                           //再用strlen函数来进行截取，得到字符串结束符前的字符串
                           int x=strlen(sst.c_str());
                           sst=sst.substr(0,x);
+                          errs() << "1修改后匹配的字符串为："<< "\n";
+                          errs() << sst<< "\n";
                           //因为可能包含结束符前存在换行符的情况，这边进行人工删除
-                          if(sst.find_first_of(line_break.str()))
-                          { 
-                            sst=sst.substr(0,sst.find_first_of(line_break.str()));
-                          }
+                          //if(sst.find_first_of(line_break.str()))
+                          //{ 
+                          //  sst=sst.substr(0,sst.find_first_of(line_break.str()));
+                          //}
+                          //errs() << "2修改后匹配的字符串为："<< "\n";
+                          //errs() << sst<< "\n";
                           return sst;
                         }
                           ++round_2;
@@ -462,8 +469,8 @@ namespace {
     //组成如下：
     //%[flags][width][.prec][length]type
     //详细定义说明见链接：https://cplusplus.com/reference/cstdio/printf/?kw=printf
-    std::regex printf_format_pattern("%[-,+,#,0, ]{0,1}([1-9]|[*]){0,1}(.1-9|.[*]){0,1}(d|hhd|hd|ld|lld|jd|zd|td|o|hho|ho|lo|llo|joo|zo|to|u|hhu|hu|lu|llu|ju|zu|tu|x|hhx|hx|lx|llx|jx|zx|tx|X|hhX|hX|lX|llX|jX|zX|tX|c|lc|f|lf|Lf|F|LF|e|Le|E|LE|g|Lg|G|LG|a|La|A|LA|s|ls|p|n|hhn|hn|ln|lln|jn|zn|tn)");
-    std::regex lengthType_pattern("(d|hhd|hd|ld|lld|jd|zd|td|o|hho|ho|lo|llo|joo|zo|to|u|hhu|hu|lu|llu|ju|zu|tu|x|hhx|hx|lx|llx|jx|zx|tx|X|hhX|hX|lX|llX|jX|zX|tX|c|lc|f|lf|Lf|F|LF|e|Le|E|LE|g|Lg|G|LG|a|La|A|LA|s|ls|p|n|hhn|hn|ln|lln|jn|zn|tn)");
+    std::regex printf_format_pattern("%[-,+,#,0,., ]{0,1}([1-9]|[*]){0,1}(.1-9|.[*]){0,1}(i|d|hhd|hd|ld|lld|jd|zd|td|o|hho|ho|lo|llo|joo|zo|to|u|hhu|hu|lu|llu|ju|zu|tu|x|hhx|hx|lx|llx|jx|zx|tx|X|hhX|hX|lX|llX|jX|zX|tX|c|lc|f|lf|Lf|F|LF|e|Le|E|LE|g|Lg|G|LG|a|La|A|LA|s|ls|p|n|hhn|hn|ln|lln|jn|zn|tn)");
+    std::regex lengthType_pattern("(i|d|hhd|hd|ld|lld|jd|zd|td|o|hho|ho|lo|llo|joo|zo|to|u|hhu|hu|lu|llu|ju|zu|tu|x|hhx|hx|lx|llx|jx|zx|tx|X|hhX|hX|lX|llX|jX|zX|tX|c|lc|f|lf|Lf|F|LF|e|Le|E|LE|g|Lg|G|LG|a|La|A|LA|s|ls|p|n|hhn|hn|ln|lln|jn|zn|tn)");
     std::string test_format="hellowyes";
     std::regex prec_pattern("[*]");
     std::smatch temp_type;
@@ -903,6 +910,9 @@ namespace {
     }
     //生成@prinf(...)
     auto call = Builder.CreateCall(printfFunc, asm_args);
+    //替换掉原来的call的话需要对齐RSP
+    auto RSP_Stack_offset =Builder.CreateAdd(Builder.CreateLoad(State.RSP),llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context),8));
+    auto StoreRSP = Builder.CreateStore(RSP_Stack_offset,State.RSP);
     //获取原来的call @ext_printf,并删除
     llvm::Instruction *call_next= callInst->getNextNonDebugInstruction();
     call_next->eraseFromParent();
