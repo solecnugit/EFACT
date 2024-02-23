@@ -55,8 +55,8 @@ extern "C" int vfprintf_mcsema(ee_FILE *fp,const char* str,...) {
     int rv;
     va_list args;
     va_start(args, str);
-    std::cout << "arg1:" << fp << std::endl;
-    std::cout << "arg2:" << str << std::endl;
+    //std::cout << "arg1:" << fp << std::endl;
+    //std::cout << "arg2:" << str << std::endl;
     rv = vfprintf(fp, str, args);
     va_end(args);
     printf("结束了vfprintf_mcsema的runtime support\n");
@@ -83,8 +83,8 @@ extern "C" int vfprintf_inline_mcsema(ee_FILE *fp,const char* str,...) {
     int rv;
     va_list args;
     va_start(args, str);
-    std::cout << "arg1:" << fp << std::endl;
-    std::cout << "arg2:" << str << std::endl;
+    //std::cout << "arg1:" << fp << std::endl;
+    //std::cout << "arg2:" << str << std::endl;
     rv = vfprintf(fp, str, args);
     va_end(args);
     printf("结束了vfprintf_inline_mcsema的runtime support\n");
@@ -108,7 +108,7 @@ extern "C" int vprintf_mcsema(const char* str,...) {
     int rv;
     va_list args;
     va_start(args, str);
-    std::cout << "arg1:" << str << std::endl;
+    //std::cout << "arg1:" << str << std::endl;
     rv = vprintf(str, args);
     va_end(args);
     printf("结束了vprinf_mcsema的runtime support\n");
@@ -128,8 +128,8 @@ extern "C" int vsprintf_mcsema(char* str,const char* format, ...) {
     int rv;
     va_list args;
     va_start(args, format);
-    std::cout << "arg1:" << str << std::endl;
-    std::cout << "arg2:" << format << std::endl;
+    //std::cout << "arg1:" << str << std::endl;
+    //std::cout << "arg2:" << format << std::endl;
     rv = vsprintf(str,format, args);
     va_end(args);
     printf("结束了vsprinf_mcsema的runtime support\n");
@@ -148,9 +148,9 @@ extern "C" int vsnprintf_mcsema(char* str,size_t size,const char* format,...) {
     int rv;
     va_list args;
     va_start(args, format);
-    std::cout << "arg1:" << str << std::endl;
-    std::cout << "arg2:" << size << std::endl;
-    std::cout << "arg3:" << format << std::endl;   
+    //std::cout << "arg1:" << str << std::endl;
+    //std::cout << "arg2:" << size << std::endl;
+    //std::cout << "arg3:" << format << std::endl;   
     rv = vsnprintf(str,size,format, args);
     va_end(args);
     printf("结束了vsprinf_mcsema的runtime support\n");
@@ -164,8 +164,8 @@ extern "C" int vfscanf_mcsema(ee_FILE *fp,const char* str,...) {
     int rv;
     va_list args;
     va_start(args, str);
-    std::cout << "arg1:" << fp << std::endl;
-    std::cout << "arg2:" << str << std::endl;
+    //std::cout << "arg1:" << fp << std::endl;
+    //std::cout << "arg2:" << str << std::endl;
     rv = vfscanf(fp, str, args);
     va_end(args);
     printf("结束了vfscanf_mcsema的runtime support\n");
@@ -177,8 +177,8 @@ extern "C" int vsscanf_mcsema(char* str,const char* format, ...) {
     int rv;
     va_list args;
     va_start(args, format);
-    std::cout << "arg1:" << str << std::endl;
-    std::cout << "arg2:" << format << std::endl;
+    //std::cout << "arg1:" << str << std::endl;
+    //std::cout << "arg2:" << format << std::endl;
     rv = vsscanf(str,format, args);
     va_end(args);
     printf("结束了vsscanf_mcsema的runtime support\n");
