@@ -102,20 +102,7 @@ namespace
       {"XMM7", 13},
       {"RSP", 30},
   };
-  /*std::map<int,std::string> NumToRegister_map ={
-{0,"RDI"},
-{1,"RSI"},
-{2,"RDX"},
-{3,"RCX"},
-{4,"R8"},
-{5,"R9"},
-{6,"XMM0"},
-{7,"XMM1"},
-{8,"XMM2"},
-{9,"XMM3"},
-{10,"XMM4"},
-{11,"XMM5"},
-};*/
+
 
   std::map<std::string, std::string> printf_format_map = {
       {"i", "int"},
@@ -225,39 +212,7 @@ namespace
       {"ptrdiff_t*", 29},
   };
 
-  /*std::map<std::string,llvm::Type> typeToLLLVMtype_map ={
-  {"int",0},
-  {"short int",1},
-  {"long int",2},
-  {"long long int",3},
-  {"unsigned int",4},
-  {"unsigned short int",5},
-  {"unsigned long int",6},
-  {"unsigned long long int",7},
-  {"wint_t",8},
-  {"intmax_t",9},
-  {"uintmax_t",10},
-  {"int*",11},
-  {"short int*",12},
-  {"long int*",13},
-  {"long long int*",14},
-  {"intmax_t*",15},
-  {"char",16},
-  {"signed char",17},
-  {"unsigned char",18},
-  {"char*",19},
-  {"signed char*",20},
-  {"wchar_t*",21},
-  //目前只有double类型需要用到xmm寄存器
-  {"double",22},
-  {"long double",23},
-  //
-  {"void*",24},
-  {"size_t",25},
-  {"size_t*",26},
-  {"ptrdiff_t",27},
-  {"ptrdiff_t*",28},
-  };*/
+  
 
   struct PrintfFormatReinterpret : public ModulePass
   {
@@ -295,6 +250,8 @@ namespace
         // 不同函数的正则匹配规则
         std::regex extPrintf_pattern("ext_[0-9a-z]*_printf");
         std::regex rdi_pattern("RDI_[0-9a-z]*_[0-9a-z]*");
+        std::regex rax_pattern("RAX_[0-9a-z]*_[0-9a-z]*");
+        std::regex rbp_pattern("RBP_[0-9a-z]*_[0-9a-z]*");
         std::regex register_pattern("[A-Z0-9]*_[0-9a-z]*_[0-9a-z]*");
         std::regex data_pattern("data_[0-9a-z]*");
         std::regex printf_pattern("printf");
@@ -327,10 +284,11 @@ namespace
                 {
                   // 因为这边我们明确知道我们要找的 的store 指令格式为： store *** to @RDI  所以这边的
                   // 判断条件，我们直接取operand(1)，即第二个参数。
-                  if (subInst.getOperand(1) != NULL
-                      //&& std::regex_match(subInst.getOperand(1)->getName().str(),register_pattern)
-                      && std::regex_match(subInst.getOperand(1)->getName().str(), rdi_pattern) && std::regex_match(subInst.getOperand(0)->getName().str(), data_pattern))
+                  // 2024-3-11：format可能是以pointer的形式传入RDI，即不使用data_****的形式，这边需要做进一步的处理。
+                  if (subInst.getOperand(1) != NULL && std::regex_match(subInst.getOperand(1)->getName().str(), rdi_pattern)) 
                   {
+                    //&& std::regex_match(subInst.getOperand(0)->getName().str(), data_pattern))
+
                     // errs() << subInst<< "\n";
                     // errs() << subInst.getOperand(0)->getName().str()<< "\n";
                     // 找到我们真正想要的第一个参数
@@ -385,18 +343,15 @@ namespace
                     if (subInst.getOperand(1) != NULL
                         //&& std::regex_match(subInst.getOperand(1)->getName().str(),register_pattern)
                         && std::regex_match(subInst.getOperand(1)->getName().str(), rdi_pattern))
-                    {
-                      errs() << subInst << "\n";
-                      errs() << subInst.getOperand(0)->getName().str() << "\n";
+                    {                   
                       // 找到我们真正想要的第一个参数
-                      if (std::regex_match(subInst.getOperand(0)->getName().str(), data_pattern))
-                      {
+                      // 2024-3-11：format可能是以pointer的形式传入RDI，即不使用data_****的形式，这边需要做进一步的处理。
+                      //if (std::regex_match(subInst.getOperand(0)->getName().str(), data_pattern))
+                      //{
                         backUpInstructionStack.push(&subInst);
                         stop_pre_find_flag = 1;
-                      }
-                      // backUpInstructionStack.push(&subInst);
-                      // stop_pre_find_flag =1;
-                      // break;
+                      //}
+
                     }
                   }
                 }
@@ -406,7 +361,20 @@ namespace
                 {
                   extPrintfDetail temNode;
                   temNode.ext_inst = backUpInstructionStack.top();
-                  temNode.format = findGelementPointerInstTypeFormatString(M, temNode.ext_inst->getOperand(0)->getName().str());
+                  //format不能再简单的只是取第一个值，需要根据情况进一步解析
+                  //情况1：format是以data_****的形式传入RDI
+                  //原先的判断条件会出错，现在改成对类型判断
+                  // if (std::regex_match(temNode.ext_inst->getOperand(0)->getName().str(), data_pattern))
+                  if(temNode.ext_inst->getOperand(0)->getType()->isPointerTy())
+                  {
+                    temNode.format = findGelementPointerInstTypeFormatString(M, temNode.ext_inst->getOperand(0)->getName().str());
+                  }else{
+                    //情况2：format是以pointer的形式传入RDI
+                    errs() << "format是以pointer的形式传入RDI\n";
+                    temNode.format = findGelementPointerInstTypeFormatStringFromPointer(M, temNode.ext_inst);
+                    errs() << temNode.format<< "\n";
+                   
+                  }
                   temNode.prased_decl = analysisPrintfFormatAndGetDecl(&temNode);
 
                   // errs() << temNode.format<< "\n";
@@ -426,6 +394,313 @@ namespace
       }
       return true;
     }
+
+
+
+
+    /// 接受一个inst,找到该inst前所在的BB中所囊盖的存放format的栈地址，并向前回溯，一直找到对应的data_****的GlobalAlias
+    std::string findGelementPointerInstTypeFormatStringFromPointer(Module &M, llvm::Instruction *inst)
+    {
+      std::regex RBP_pattern("RBP_[0-9a-z]*_[0-9a-z]*");
+      std::regex GeneralRegister_pattern("R[0-9A-Z]*_[0-9a-z]*_[0-9a-z]*");
+      std::regex data_pattern("data_[0-9a-z]*");
+      llvm::Value *v = inst->getOperand(0);
+      bool continue_flag = false;
+      while (continue_flag == false)
+      {
+        if ( llvm::LoadInst *preDefine = dyn_cast<LoadInst>(v))
+        {
+          //如果是load指令，则首先判断该load指令能不能确定到相关的寄存器
+          if (GlobalAlias *ga = dyn_cast<GlobalAlias>(preDefine->getPointerOperand())) {
+            //如果是GlobalAlias，则进一步判断是从栈上取的还是从通用寄存器上取的
+            if (std::regex_match(ga->getName().str(), RBP_pattern))
+            {
+              //如果是从栈上取的，则先确定栈上的offset
+              llvm::Instruction *OffsetInst = preDefine->getNextNonDebugInstruction();
+              llvm::Value *offset = OffsetInst->getOperand(1);
+              //拿到offset后，则向前遍历，找到什么值被塞进去该栈地址
+              BasicBlock *BB = preDefine->getParent();
+
+              while (BB != NULL)
+              {
+                for (BasicBlock *Pred : predecessors(BB))
+                {
+                  BB = Pred;
+                  break;
+                }
+                errs() << "BB的名字"
+                       << "\n";
+                errs() << BB->getName() << "\n";
+
+                for (Instruction &subInst : *BB)
+                {
+                  // 首先找到load指令
+                  if (subInst.getOpcode() == Instruction::Load)
+                  {
+                    llvm::LoadInst *subLoadInst = dyn_cast<LoadInst>(&subInst);
+                    // 我们先结合offset找到操作该栈地址的地方
+                    // 判断条件，我们直接取operand(1)，即第二个参数。
+                    if (GlobalAlias *Subga = dyn_cast<GlobalAlias>(subLoadInst->getPointerOperand()))
+                    {    
+                        //再判断该load指令操作的是不是RBP               
+                        if (std::regex_match(Subga->getName().str(), RBP_pattern))
+                        {
+                          //再判断RBP后面的offset是不是我们要找的地址 
+                          llvm::Instruction *subOffsetInst = subLoadInst->getNextNonDebugInstruction();
+                          llvm::Value *subOffset = subOffsetInst->getOperand(1);
+                          errs() << *subOffset<< "\n";
+                          errs() << *offset<< "\n";
+                          if(subOffset == offset)
+                          {
+                            errs() << "找到了我们想要探索的栈目标\n";
+                            //找到了我们想要探索的栈目标，开始往后探索，找到被存入了的store指令
+                            llvm::StoreInst *subStoreInst = checkIfStored(subOffsetInst);
+                            if (subStoreInst == nullptr)
+                            {
+                              errs() << "该目标不匹配，继续向前"<< "\n";
+                              break;
+                            }else{
+                                errs() << "找到了我们想要的store指令"<< "\n";
+                                errs() << *subStoreInst<< "\n";
+                                //如果发现是存入的情况，那么就是我们想要的情况。
+                                errs() << *subStoreInst->getOperand(0)<< "\n";
+                                llvm::Value *subsubv = subStoreInst->getOperand(0);
+                                //我们再看看这个第一个参数是从哪个GA中拿出来的
+                                llvm::LoadInst *subsubLoadInst = dyn_cast<LoadInst>(subsubv);
+                                std::regex ConveyRegister_pattern=findGeneralPurposeRegister(subsubLoadInst->getPointerOperand()->getName().str());
+                                //一般情况下，该GA的赋值都在前一个基本快内
+                                BasicBlock *PreBB = subsubLoadInst->getParent()->getPrevNode();
+                                while (PreBB != NULL)
+                                {
+                                  for (Instruction &PreSubSubInst : *PreBB)
+                                  {
+                                    if (PreSubSubInst.getOpcode() == Instruction::Store)
+                                    {
+                                      llvm::StoreInst *PreSubSubStoreInst = dyn_cast<StoreInst>(&PreSubSubInst);
+                                      if (GlobalAlias *PreSubga = dyn_cast<GlobalAlias>(PreSubSubStoreInst->getPointerOperand()))
+                                          {
+                                            if (std::regex_match(PreSubga->getName().str(), ConveyRegister_pattern))
+                                            {
+                                              //找到了我们想要的GA
+                                            //这边我们知道是store指令，故直接取第一个参数,到此我们找到了我们需要的data
+                                              return findGelementPointerInstTypeFormatString(M, PreSubSubInst.getOperand(0)->getName().str());
+
+                                            }
+                                          }
+                                      
+                                    }
+                                  }
+                                }
+                              
+                              
+                            }
+
+
+                             
+                          }
+                        }
+                    }
+                  }
+                } 
+              }
+            }else{
+              //不是从栈中取出来的，而是从其他标准寄存器中取出来的
+              //我们先看看这个GA是哪个标准寄存器
+              errs() << "这个GA是哪个标准寄存器"<< "\n";
+              errs() << ga->getName().str()<< "\n";
+              std::regex ConveyRegister_pattern=findGeneralPurposeRegister(ga->getName().str());
+              //然后开始向前遍历，找到这个GA是被存入的data的名字
+              BasicBlock *BB = preDefine->getParent();
+              while (BB != NULL)
+              {
+                for (BasicBlock *Pred : predecessors(BB))
+                {
+                  BB = Pred;
+                  break;
+                }
+                errs() << "BB的名字"
+                       << "\n";
+                errs() << BB->getName() << "\n";
+
+                for (Instruction &subInst : *BB)
+                {
+                  errs() << subInst<< "\n";
+                  // 首先找到Store指令
+                  if (subInst.getOpcode() == Instruction::Store)
+                  {
+                    llvm::StoreInst *subStoreInst = dyn_cast<StoreInst>(&subInst);
+                    if ( GlobalAlias *Subga = dyn_cast<GlobalAlias>(subStoreInst->getPointerOperand()))
+                        {
+                          if (std::regex_match(Subga->getName().str(), ConveyRegister_pattern))
+                          {
+                            //找到了我们想要的GA
+                          //这边我们知道是store指令，故直接取第一个参数,到此我们找到了我们需要的data
+                          return findGelementPointerInstTypeFormatString(M, subStoreInst->getOperand(0)->getName().str());
+                          //return subInst.getOperand(0)->getName().str();
+                          }
+                        }
+                  }
+
+
+                }
+              }
+
+            }
+          }else{
+            //虽然是load指令，但并不是从GA中取出来的，则再往前遍历
+            v = preDefine->getPointerOperand();
+            errs() << *v<< "\n";
+            continue;
+          }
+
+        }else{
+          //如果不是load 指令，则继续向前遍历
+          //先判断是不是指令
+          if (auto* inst = dyn_cast<Instruction>(v)) {
+            v = inst->getOperand(0);
+            errs() << *v<< "\n";
+            continue;
+          }else{
+            errs() << "解析过程中出现了未考虑到的问题\n";
+          }
+        }
+
+        continue_flag = true;
+      }
+      
+
+      return "";
+    }
+
+
+
+
+
+
+
+    //输入是一个llvm Value，向后遍历它的user，直到找到Store指令为止
+    llvm::StoreInst* checkIfStored(llvm::Value *value) {
+      // Iterate over the direct users of the value
+      for (auto *U : value->users()) {
+          // Check if this user is a StoreInst
+          if (llvm::StoreInst *storeInst = llvm::dyn_cast<llvm::StoreInst>(U)) {
+              // Now, check if the store destination is the value we are looking for
+              errs() << *storeInst<< "\n";
+              errs() << *storeInst->getPointerOperand()<< "\n";
+              errs() << *value<< "\n";
+              if ( storeInst->getPointerOperand() == value) {
+                return storeInst;
+              }else{
+                return nullptr;
+              }
+          } else {
+              auto *result = checkIfStored(U); // Use the return value of the recursive call
+              if (result != nullptr) {
+                  // If a StoreInst was found in the recursive call, return it
+                  return result;
+              }
+          }
+      }
+      return nullptr;
+    }
+
+
+    //接受一个String，返回该String对应的GeneralPurposeRegister的pattern
+    std::regex findGeneralPurposeRegister(std::string str)
+    {
+      std::regex GeneralRegister_pattern("R[0-9A-Z]*_[0-9a-z]*_[0-9a-z]*");
+      std::regex RAX_pattern("RAX_[0-9a-z]*_[0-9a-z]*");
+      std::regex RBX_pattern("RBX_[0-9a-z]*_[0-9a-z]*");
+      std::regex RBP_pattern("RBP_[0-9a-z]*_[0-9a-z]*");
+      std::regex RSP_pattern("RBP_[0-9a-z]*_[0-9a-z]*");
+      std::regex RDI_pattern("RDI_[0-9a-z]*_[0-9a-z]*");
+      std::regex RSI_pattern("RSI_[0-9a-z]*_[0-9a-z]*");
+      std::regex RDX_pattern("RDX_[0-9a-z]*_[0-9a-z]*");
+      std::regex RCX_pattern("RCX_[0-9a-z]*_[0-9a-z]*");
+      std::regex R8_pattern("R8_[0-9a-z]*_[0-9a-z]*");
+      std::regex R9_pattern("R9_[0-9a-z]*_[0-9a-z]*");
+      std::regex R10_pattern("R10_[0-9a-z]*_[0-9a-z]*");
+      std::regex R11_pattern("R11_[0-9a-z]*_[0-9a-z]*");
+      std::regex R12_pattern("R12_[0-9a-z]*_[0-9a-z]*");
+      std::regex R13_pattern("R13_[0-9a-z]*_[0-9a-z]*");
+      std::regex R14_pattern("R14_[0-9a-z]*_[0-9a-z]*");
+      std::regex R15_pattern("R15_[0-9a-z]*_[0-9a-z]*");
+      std::regex ERROR("ERROR");
+
+
+      if (std::regex_match(str, RAX_pattern))
+      {
+        errs() << "找到了RAX\n";
+        return RAX_pattern;
+      }else if (std::regex_match(str, RBX_pattern))
+      {
+        errs() << "找到了RBX\n";
+        return RBX_pattern;
+      }else if (std::regex_match(str, RBP_pattern))
+      {
+        errs() << "找到了RBP\n";
+        return RBP_pattern;
+      }else if (std::regex_match(str, RSP_pattern))
+      {
+        errs() << "找到了RSP\n";
+        return RSP_pattern;
+      }else if (std::regex_match(str, RDI_pattern))
+      {
+        errs() << "找到了RDI\n";
+        return RDI_pattern;
+      }else if (std::regex_match(str, RSI_pattern))
+      {
+        errs() << "找到了RSI\n";
+        return RSI_pattern;
+      }else if (std::regex_match(str, RDX_pattern))
+      {
+        errs() << "找到了RDX\n";
+        return RDX_pattern;
+      }else if (std::regex_match(str, RCX_pattern))
+      {
+        errs() << "找到了RCX\n";
+        return RCX_pattern;
+      }else if (std::regex_match(str, R8_pattern))
+      {
+        errs() << "找到了R8\n";
+        return R8_pattern;
+      }else if (std::regex_match(str, R9_pattern))
+      {
+        errs() << "找到了R9\n";
+        return R9_pattern;
+      }else if (std::regex_match(str, R10_pattern))
+      {
+        errs() << "找到了R10\n";
+        return R10_pattern;
+      }else if (std::regex_match(str, R11_pattern))
+      {
+        errs() << "找到了R11\n";
+        return R11_pattern;
+      }else if (std::regex_match(str, R12_pattern))
+      {
+        errs() << "找到了R12\n";
+        return R12_pattern;
+      }else if (std::regex_match(str, R13_pattern))
+      {
+        errs() << "找到了R13\n";
+        return R13_pattern;
+      }else if (std::regex_match(str, R14_pattern))
+      {
+        errs() << "找到了R14\n";
+        return R14_pattern;
+      }else if (std::regex_match(str, R15_pattern))
+      {
+        errs() << "找到了R15\n";
+        return R15_pattern;
+      }else
+      {
+        errs() << "没有找到对应的GeneralPurposeRegister\n";
+        return ERROR;
+      }
+      
+    }
+
+
 
     /// 接受一个GEP格式的GlobalAlias的名字作为输入，解析该名字，找到该GlobalAlias并解析，返回最终指向
     /// 的格式化字符串
