@@ -34,7 +34,7 @@ to use this tool,you have to install :
             |--llvm/ #builed llvm library in you computer,you have to copy it from /usr/lib/llvm-11/include/llvm
             |--test.cpp
         |-- LibraryDataBase/
-        |-- pyelftools/ #clone source code from github,no need to build,just pip install
+        |-- pyelftools/ #clone source code from github, just pip install
             |--EFACT.py
             |--elftools/
             |--...
@@ -45,9 +45,12 @@ to use this tool,you have to install :
         |-- dict_example
         |-- openssl
         |-- llvm_pass_for_VPC
+            |--changeBugOffset #a pass to change the bug offset in the llvm ir
             |--printfPass.cpp  #a pass to resolve the printf VPC.
-            |--va_listPass.cpp - #a pass to address the va_list VPC between ISAs.
-            |--va_listHelperFunc.cpp - #the source file for helper functions
+            |--va_list - #a pass to address the va_list VPC between ISAs.
+            |--rdtsc - #a pass to address the unsupport of the rdtsc on AArch64.
+            |--checkLinkerType #a pass to change the linker type wich AArch64 not support.
+            |--ExternalEntryPointRecovery #a pass to address the External Entry Point porblem.
             |--dlopen/symPass.cpp - #Passes to resolve the function loaded by dlopen/sym.
 
 
