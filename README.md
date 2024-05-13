@@ -104,7 +104,7 @@ $ export CLANG_LIB="/usr/lib/llvm-11/lib/libclang-11.so.1"
 $ export CPATH="/home/gcc-9.4.0/include/c++/9.4.0/"
 
 #change the CPLUS_INCLUDE_PATH to point to the target builted library
-$ export CLANG_LIB="/home/gcc-9.4.0/include/c++/9.4.0/"
+$ export CPLUS_INCLUDE_PATH="/home/gcc-9.4.0/include/c++/9.4.0/"
 
 $ python generate_glibc_dict.py  
        --type c 
